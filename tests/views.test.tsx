@@ -165,3 +165,25 @@ test('recent tools show short, marked labels and open in full on press', async (
   expect(await ui.find({ type: 'Text', text: /^ {2}pnpm --filter .* ⏎ rm -rf build/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('/mods output draws in color: headings, commands, on/off dots', async $ => {
+  const text = [
+    'Cách dùng: /mods <lệnh>',
+    'Bảng:',
+    '  dash      bảng hoạt động',
+    'Bật/tắt (giữ qua các session):',
+    '  band        [bật] dải trạng thái trên ô prompt',
+    '  sound       [tắt] âm thanh khi lượt dài xong',
+  ].join('\n')
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'CommandOutput',
+    props: { command: 'mods', args: '', text, isErrored: false },
+  })
+  expect(await ui.find({ type: 'Text', text: '  ● ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '  ○ ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}dash/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'dải trạng thái trên ô prompt' })).toBeDefined()
+  await ui.unmount()
+})

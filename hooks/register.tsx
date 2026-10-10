@@ -240,6 +240,10 @@ function shortLabel(label: string) {
   return `${head.length > SHORT_LABEL ? head.slice(0, SHORT_LABEL - 1) : head}…${more ? ` (+${more} dòng)` : ''}`
 }
 
+// Rows a hover card takes at a width: its wrapped lines plus the border.
+const cardHeight = (lines: string[], width: number) =>
+  lines.reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / Math.max(1, width - 4))), 0) + 2
+
 const commandLabel = (command: string) => command.trim().replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
@@ -2276,17 +2280,22 @@ export const register: Register = on => {
       )
 
     // A hover card (36): hidden until its keyed row is hovered.
+    // Opened above its row (rows above are painted first, so the card covers
+    // them) on a solid background, as wide as the pane allows.
+    const cardWidth = Math.max(20, e.props.bodyColumns - 4)
     const card = (lines: string[], color: string) =>
       s.hovercards ? (
         <Box
           position="absolute"
-          top={1}
+          top={-cardHeight(lines, cardWidth)}
           left={2}
+          width={cardWidth}
           display="none"
           hover={{ display: 'flex' }}
           flexDirection="column"
           borderStyle="round"
           borderColor={color}
+          backgroundColor={P.ink}
           paddingX={1}
         >
           {lines.map(l => (
@@ -2882,6 +2891,7 @@ export const register: Register = on => {
         : isErrored
           ? ['✗', P.err]
           : ['✓', P.ok]
+    const badgeCardWidth = Math.max(20, (e.viewport?.columns ?? 80) - 8)
     const fields = Object.entries((e.props.input ?? {}) as Record<string, unknown>)
       .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
       .map(
@@ -2903,13 +2913,15 @@ export const register: Register = on => {
         {s.hovercards && fields.length > 0 ? (
           <Box
             position="absolute"
-            top={1}
+            top={-cardHeight([name, ...fields], badgeCardWidth)}
             left={4}
+            width={badgeCardWidth}
             display="none"
             hover={{ display: 'flex' }}
             flexDirection="column"
             borderStyle="round"
             borderColor={color}
+            backgroundColor={P.ink}
             paddingX={1}
           >
             <Text color={color} bold>
@@ -2920,6 +2932,85 @@ export const register: Register = on => {
             ))}
           </Box>
         ) : null}
+      </Box>
+    )
+  })
+
+  // /mods output in color: a card with gradient headings, commands in the
+  // accent, [bật]/[tắt] as colored dots, and ✓/✗ results by outcome.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'mods' } }, async ($, e, next) => {
+    const P = await palette($)
+    if (e.props.isErrored || !(await read($, settings)).decor) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const lines = e.props.text
+      .replace(/^terminal-polish:\s*/, '')
+      .replace(/\n+$/, '')
+      .split('\n')
+    const ICONS: Record<string, string> = { Bảng: '📊', 'Công cụ': '🧰', 'Phiên bản': '🔄', 'Bật/tắt': '🔀' }
+    const RESULT: Record<string, string> = { '✓': P.ok, '✗': P.err, '⚠': P.warn, '🔐': P.warn, '💰': P.pink }
+
+    const gradient = (text: string) =>
+      gradientRuns(text, P.grad).map(r => (
+        <Text color={r.color} bold>
+          {r.ch}
+        </Text>
+      ))
+
+    const view = (line: string, i: number) => {
+      if (i === 0 && line.startsWith('Cách dùng')) {
+        return (
+          <Box flexDirection="row" gap={2} marginBottom={1}>
+            <Box flexDirection="row">{gradient('◆ terminal-polish')}</Box>
+            <Text color={P.muted}>{line}</Text>
+          </Box>
+        )
+      }
+      const toggle = line.match(/^ {2}(\S+)\s+\[(bật|tắt)\] (.*)$/)
+      if (toggle) {
+        const [, key = '', state, desc = ''] = toggle
+        const isOn = state === 'bật'
+        return (
+          <Box flexDirection="row">
+            <Text color={isOn ? P.ok : P.muted}>{isOn ? '  ● ' : '  ○ '}</Text>
+            <Text color={isOn ? P.accent : P.muted} bold={isOn}>
+              {key.padEnd(12)}
+            </Text>
+            <Text color={isOn ? undefined : P.muted} dimColor={!isOn} wrap="truncate-end">
+              {desc}
+            </Text>
+          </Box>
+        )
+      }
+      if (/^\S.*:$/.test(line)) {
+        const label = line.replace(/:$/, '')
+        const icon = Object.entries(ICONS).find(([k]) => label.startsWith(k))?.[1] ?? '▸'
+        return (
+          <Box flexDirection="row" marginTop={i > 0 ? 1 : 0}>
+            <Text>{`${icon} `}</Text>
+            {gradient(label)}
+          </Box>
+        )
+      }
+      const command = line.match(/^ {2}(\S.*?)\s{2,}(.*)$/)
+      if (command) {
+        return (
+          <Box flexDirection="row">
+            <Text color={P.info} bold>{`  ${(command[1] ?? '').padEnd(18)}`}</Text>
+            <Text wrap="truncate-end">{command[2]}</Text>
+          </Box>
+        )
+      }
+      const mark = [...line.trimStart()][0] ?? ''
+      return (
+        <Text color={RESULT[mark]} wrap="wrap">
+          {line || ' '}
+        </Text>
+      )
+    }
+
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor={P.accent} paddingX={1}>
+        {lines.map(view)}
       </Box>
     )
   })
