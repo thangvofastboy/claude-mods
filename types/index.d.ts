@@ -27,9 +27,17 @@ export type Settings = {
   heatmap: boolean
   hovercards: boolean
   images: boolean
+  secrets: boolean
+  budget: boolean
+  checkpoints: boolean
+  branchlock: boolean
+  format: boolean
+  autocheck: boolean
+  compactplus: boolean
+  todos: boolean
 }
 export type Git = { branch: string; changed: number }
-export type Turn = { tools: number; failed: number }
+export type Turn = { tools: number; failed: number; edits: number }
 export type LastTurn = { seconds: number; tools: number; failed: number }
 export type Limit = { kind: string; percent: number }
 export type Usage = { percent: number | null; usd: number | null; limits: Limit[] }
@@ -40,6 +48,12 @@ export type Peer = { id: string; name: string; cwd: string; status: string; isSe
 export type Agent = { id: string; label: string; status: string }
 export type Diff = { path: string; text: string; note: string }
 export type Call = { id: string; tool: string; label: string; state: 'run' | 'ok' | 'fail'; ms?: number }
+export type Checkpoint = { id: number; path: string; copy: string | null; at: number }
+export type Todo = { text: string; done: boolean; file?: string }
+export type CommitDraft = { message: string; files: number; note: string }
+export type CheckResult = { ok: boolean; command: string; output: string; at: number }
+export type Category = { name: string; tokens: number; color: string }
+export type Breakdown = { categories: Category[]; total: number; max: number }
 export type SplashInfo = { greeting: string; last: string; tip: string }
 
 declare module 'claude-code' {
@@ -76,6 +90,16 @@ declare module 'claude-code' {
       splash: boolean
       splashInfo: SplashInfo | null
       heat: Record<string, number>
+      checkpoints: Checkpoint[]
+      todos: Todo[]
+      notes: string[]
+      commitDraft: CommitDraft | null
+      check: CheckResult | null
+      checkCommand: string
+      breakdown: Breakdown | null
+      budgetWarned: string
+      spentToday: number
+      budgetLimit: number
     }
   }
 }

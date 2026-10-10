@@ -33,6 +33,20 @@ Màu sắc lấy theo theme Claude Code bạn đang dùng, nên hợp cả nền
 | 🔎 **Tìm trong hội thoại** | `/mods find <từ khóa>` mở panel kết quả, kèm đoạn văn xung quanh chỗ tìm thấy. |
 | ⏱ **Hẹn giờ** | `/mods timer 25`: đếm ngược trên dải trạng thái, hết giờ thì báo. |
 | 📦 **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào là mở ra đầy đủ. |
+| 💰 **Ngân sách** | `/mods budget 5`: giới hạn $5/ngày. Đến 80% thì nhắc; vượt thì chặn prompt (gửi lại với `>>` ở đầu nếu vẫn muốn). Dải trạng thái có thanh đo `💰 $3.20/$5`. |
+| 🔐 **Quét secret** | Prompt có API key (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWT, private key hay `password=…` sẽ bị giữ lại kèm lời nhắc; gửi lại với `>>` ở đầu nếu chắc chắn. |
+| ↩️ **Checkpoint & hoàn tác** | Trước mỗi lần Claude sửa hoặc tạo file, bản cũ được lưu lại. `/mods undo [tên file]` khôi phục; `/mods checkpoints` liệt kê. Các bản lưu bị xóa khi session kết thúc. |
+| 🌿 **Khóa nhánh** | *(mặc định tắt)* chặn `git commit`/`git push` thẳng lên `main`, `master`, `production`. |
+| 🧹 **Tự format** | *(mặc định tắt)* sau khi Claude sửa file thì chạy prettier của dự án (nếu có trong `node_modules`), ruff/black, gofmt hoặc rustfmt. |
+| ✅ **Tự kiểm tra** | `/mods check "pnpm test"` đặt lệnh cho từng dự án; bật `/mods autocheck` để tự chạy sau mỗi lượt có sửa file. Kết quả hiện trên dải trạng thái. |
+| 📝 **Commit message** | `/mods commit`: Haiku đọc phần đã stage và soạn message theo Conventional Commits. Có thể sửa, commit, hoặc copy lệnh để chạy kèm git hooks. Nút "Stage tất cả" tự bỏ `.env` và file khóa ra khỏi stage. |
+| 🗜️ **Compact giữ ý chính** | Khi `/compact`, Claude được dặn giữ lại danh sách file đã sửa, luật dự án và các TODO đang mở. |
+| ☐ **Bảng TODO** | Tự gom `TODO`/`FIXME` Claude viết vào code và các mục `- [ ]` trong câu trả lời; bấm để đánh dấu xong. `/mods todo <việc>` để thêm. |
+| 📌 **Ghi chú** | `/mods note <x>`: ghi chú riêng từng dự án, có nút gửi cho Claude. |
+| 📣 **Standup** | `/mods standup`: tóm tắt hôm qua và hôm nay (lượt, thời gian, chi phí, file, việc đang mở), copy sẵn để dán. |
+| 🤝 **Bàn giao** | `/mods handoff <session>`: Haiku tóm tắt việc đang làm rồi gửi sang session khác để làm tiếp. |
+| 📋 **Copy code** | `/mods copy` copy khối code gần nhất trong câu trả lời; `/mods copy 2` copy khối gần nhì. |
+| 🧠 **Phân tích context** | `/mods context`: context đang bị chiếm bởi những gì (system prompt, tool, file, hội thoại…), kèm thanh màu cho từng phần. |
 | 🎨 **Theme** | `/mods theme catppuccin \| tokyonight \| dracula \| nord \| gruvbox \| auto` (hoặc chọn trong tab Cài đặt). `auto` theo theme của Claude Code; các theme còn lại dùng bảng màu nền tối chính thức của chúng. |
 | 🌈 **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo ở màn chào được tô chuyển màu theo theme. |
 | ▰ **Thanh đo** | Context và quota hiện dạng `ctx ▰▰▰▱▱▱ 42%`, màu chuyển dần từ xanh sang vàng rồi đỏ. |
@@ -63,6 +77,15 @@ Rồi gõ `/mods` để xem hướng dẫn.
 | `/mods` | Hướng dẫn và trạng thái bật/tắt của từng tính năng |
 | `/mods settings` | Tab cài đặt: bật/tắt nhanh mọi tính năng, chọn theme |
 | `/mods theme <tên>` | Đổi bảng màu |
+| `/mods budget <$>` · `budget off` | Giới hạn chi tiêu theo ngày |
+| `/mods undo [file]` · `checkpoints` | Hoàn tác lần sửa file gần nhất của Claude |
+| `/mods check "<lệnh>"` · `check run` · `check off` | Lệnh kiểm tra của dự án |
+| `/mods commit` | Soạn commit message |
+| `/mods todo [việc]` · `note [ghi chú]` | Bảng TODO, ghi chú |
+| `/mods standup` | Báo cáo standup |
+| `/mods handoff <session>` | Bàn giao cho session khác |
+| `/mods copy [n]` | Copy khối code |
+| `/mods context` | Phân tích context |
 | `/mods sel` | Hành động với đoạn đang bôi đen |
 | `/mods find <x>` | Tìm trong hội thoại này |
 | `/mods stats` | Thống kê 7 ngày |
@@ -75,9 +98,9 @@ Rồi gõ `/mods` để xem hướng dẫn.
 | `/mods save <prompt>` | Lưu một prompt nhanh |
 | `/mods version` | Phiên bản đang dùng và tag mới nhất |
 | `/mods update` | Cập nhật lên tag mới nhất, xong tự chạy `/reload-plugins` |
-| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` `gradient` `powerline` `meters` `statecolor` `fileicons` `anim` `confetti` `splash` `heatmap` `hovercards` `images` |
+| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` `gradient` `powerline` `meters` `statecolor` `fileicons` `anim` `confetti` `splash` `heatmap` `hovercards` `images` `secrets` `budget` `checkpoints` `branchlock` `format` `autocheck` `compactplus` `todos` |
 
-Mặc định: `sound`, `voice`, `autocompact`, `automodel` và `powerline` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
+Mặc định: `sound`, `voice`, `autocompact`, `automodel`, `powerline`, `branchlock`, `format` và `autocheck` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
 
 **Mẹo:**
 - Muốn gõ vào ô nhập trong panel (nhắn tin, thêm prompt) thì bấm **ctrl+x tab** để chuyển vào panel, Esc để quay về prompt.
@@ -130,4 +153,8 @@ scripts/release.sh   đánh tag và phát hành
 - Tự chọn model dùng thêm một lần gọi Haiku ở đầu mỗi lượt để phân loại câu hỏi, và có thể phân loại sai. Vì vậy mặc định tắt.
 - Các theme có tên được thiết kế cho nền tối; trên terminal nền sáng thì nên dùng `auto`.
 - Màu hex cần terminal hỗ trợ truecolor (tmux cần bật `Tc`/`RGB`). Hiệu ứng vẽ lại khoảng 12 khung hình/giây chỉ trong lúc chạy; tắt bằng `/mods anim` và `/mods confetti` nếu terminal bị nhấp nháy.
+- Quét secret dựa trên các mẫu phổ biến nên có thể bỏ sót hoặc báo nhầm; nó là lưới an toàn, không thay cho việc cẩn thận.
+- Commit bằng nút **Commit** không chạy git hooks (để tránh chạy chương trình lạ trong repo). Muốn chạy hooks thì bấm **Copy lệnh** rồi tự chạy.
+- `format` chạy prettier **của chính dự án** (`node_modules/.bin/prettier`), tức là code do repo cung cấp; chỉ bật khi bạn tin repo đó.
+- `format` chạy formatter ngay sau khi Claude sửa file; nếu Claude sửa tiếp đúng đoạn đó, nó sẽ phải đọc lại file trước.
 - TL;DR gọi thêm Haiku nên tốn thêm một ít token. Tắt bằng `/mods tldr`.

@@ -124,3 +124,19 @@ test('the settings tab switches the theme', async ($, on) => {
   expect((await ui.find({ key: 'theme-dracula' }))?.text).toContain('● dracula')
   await ui.unmount()
 })
+
+test('the TODO pane adds an item and ticks it off', async ($, on) => {
+  mock.store(on)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'terminal-polish-todo',
+    props: { title: 'TODO', ...PANE_PROPS },
+  })
+  await ui.input({ key: 'todo-new', text: 'viết test cho budget' })
+  expect((await ui.find({ key: 'todo-toggle-0' }))?.text).toContain('☐ viết test cho budget')
+  await ui.press({ key: 'todo-toggle-0' })
+  expect((await ui.find({ key: 'todo-toggle-0' }))?.text).toContain('☑ viết test cho budget')
+  await ui.unmount()
+})

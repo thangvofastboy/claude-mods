@@ -3,7 +3,11 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type {
   Agent,
+  Breakdown,
   Call,
+  CheckResult,
+  Checkpoint,
+  CommitDraft,
   Diff,
   Found,
   Git,
@@ -13,6 +17,7 @@ import type {
   Settings,
   SplashInfo,
   TimerState,
+  Todo,
   Turn,
   Usage,
 } from '../types'
@@ -24,6 +29,13 @@ const PROMPTS_PANE = 'terminal-polish-prompts'
 const SETTINGS_PANE = 'terminal-polish-settings'
 const SELECTION_PANE = 'terminal-polish-selection'
 const FIND_PANE = 'terminal-polish-find'
+const TODO_PANE = 'terminal-polish-todo'
+const NOTES_PANE = 'terminal-polish-notes'
+const COMMIT_PANE = 'terminal-polish-commit'
+const CONTEXT_PANE = 'terminal-polish-context'
+// Not `!`: a leading `!` in the composer runs a shell command and never reaches prompt.submit.
+const BYPASS = '>>'
+const MAX_CHECKPOINTS = 50
 const COMPACT_PERCENT = 85
 const COLLAPSE_LINES = 3
 const NOTIFY_TOOL = 'mcp__terminal-polish__notify_me'
@@ -65,6 +77,14 @@ const DEFAULTS: Settings = {
   heatmap: true,
   hovercards: true,
   images: true,
+  secrets: true,
+  budget: true,
+  checkpoints: true,
+  branchlock: false,
+  format: false,
+  autocheck: false,
+  compactplus: true,
+  todos: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -95,6 +115,14 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
   hovercards: 'thẻ chi tiết khi rê chuột (fullscreen)',
   images: 'ảnh logo ở màn chào (kitty/Ghostty)',
+  secrets: 'chặn prompt có API key, token, private key (gửi lại với >> ở đầu để vẫn gửi)',
+  budget: 'giới hạn chi tiêu theo ngày đặt bằng /mods budget',
+  checkpoints: 'lưu bản cũ trước khi Claude sửa file (/mods undo)',
+  branchlock: 'chặn commit/push thẳng lên main, master, production',
+  format: 'tự format file sau khi Claude sửa (prettier, ruff, gofmt, rustfmt)',
+  autocheck: 'tự chạy lệnh kiểm tra (/mods check) sau lượt có sửa file',
+  compactplus: 'giữ file đã sửa, luật và TODO khi /compact',
+  todos: 'gom TODO/FIXME và checklist vào bảng TODO',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 
@@ -129,6 +157,16 @@ const fx = atom({ plugin: 'terminal-polish', key: 'fx' } as const, null)
 const splash = atom({ plugin: 'terminal-polish', key: 'splash' } as const, false)
 const splashInfo = atom({ plugin: 'terminal-polish', key: 'splashInfo' } as const, null)
 const heat = atom({ plugin: 'terminal-polish', key: 'heat' } as const, {})
+const checkpoints = atom({ plugin: 'terminal-polish', key: 'checkpoints' } as const, [])
+const todos = atom({ plugin: 'terminal-polish', key: 'todos' } as const, [])
+const notes = atom({ plugin: 'terminal-polish', key: 'notes' } as const, [])
+const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
+const check = atom({ plugin: 'terminal-polish', key: 'check' } as const, null)
+const checkCommand = atom({ plugin: 'terminal-polish', key: 'checkCommand' } as const, '')
+const breakdown = atom({ plugin: 'terminal-polish', key: 'breakdown' } as const, null)
+const budgetWarned = atom({ plugin: 'terminal-polish', key: 'budgetWarned' } as const, '')
+const spentToday = atom({ plugin: 'terminal-polish', key: 'spentToday' } as const, 0)
+const budgetLimit = atom({ plugin: 'terminal-polish', key: 'budgetLimit' } as const, 0)
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
 const STATE_ROLE = { run: 'warn', ok: 'ok', fail: 'err' } as const
@@ -1035,6 +1073,428 @@ async function buildSplash($: EngineInterface) {
   await update($, splashInfo, () => info)
 }
 
+// ================================================================ productivity
+// ---- per-project lists kept in $.store under the project root
+async function loadProjectList($: EngineInterface, key: string): Promise<string[]> {
+  const raw = await $.store.get(key)
+  const all = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const list = all[await read($, root)]
+  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : []
+}
+
+async function saveProjectValue($: EngineInterface, key: string, value: unknown) {
+  const raw = await $.store.get(key)
+  const all = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {}
+  all[await read($, root)] = value
+  await $.store.set(key, all)
+}
+
+// ---- budget (38): today's spend from the stats, a daily limit in $.store
+async function refreshSpend($: EngineInterface) {
+  const stats = await loadStats($)
+  const today = Object.values(stats[localDay(await $.clock.now())] ?? {}).reduce((n, r) => n + r.usd, 0)
+  await update($, spentToday, () => today)
+  const raw = await $.store.get('budget')
+  const limit = typeof raw === 'number' && raw > 0 ? raw : 0
+  await update($, budgetLimit, () => limit)
+}
+
+async function budgetCommand($: EngineInterface, rest: string) {
+  if (rest === 'off' || rest === '0') {
+    await $.store.set('budget', 0)
+    await refreshSpend($)
+    return 'Đã bỏ giới hạn chi tiêu.'
+  }
+  const amount = Number.parseFloat(rest.replace('$', ''))
+  if (rest && amount > 0) {
+    await $.store.set('budget', amount)
+    await refreshSpend($)
+    return `Giới hạn chi tiêu: $${amount.toFixed(2)}/ngày. Hôm nay đã dùng $${(await read($, spentToday)).toFixed(2)}.`
+  }
+  const limit = await read($, budgetLimit)
+  return `Hôm nay: $${(await read($, spentToday)).toFixed(2)}${limit ? ` / $${limit.toFixed(2)}` : ' (chưa đặt giới hạn)'}. Đặt: /mods budget 5 · bỏ: /mods budget off`
+}
+
+// ---- secrets (39): spellings of credentials that should not ride in a prompt
+const SECRET_PATTERNS: readonly [RegExp, string][] = [
+  [/-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/, 'private key'],
+  [/\bAKIA[0-9A-Z]{16}\b/, 'AWS access key'],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/, 'GitHub token'],
+  [/\bsk-ant-[A-Za-z0-9_-]{20,}/, 'Anthropic API key'],
+  [/\bsk-(proj-)?[A-Za-z0-9_-]{32,}/, 'OpenAI API key'],
+  [/\bxox[abposr]-[A-Za-z0-9-]{10,}/, 'Slack token'],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/, 'Google API key'],
+  [/\b(sk|rk)_live_[0-9A-Za-z]{20,}/, 'Stripe live key'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, 'JWT'],
+  // A value with a digit and no `.`/`(`: `password = hunter2x9`, not `password: user.password`.
+  [
+    /\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['"]?(?=[^\s'".()]*\d)[^\s'".()]{8,}/i,
+    'mật khẩu/secret dạng key=value',
+  ],
+]
+const secretIn = (text: string) => SECRET_PATTERNS.find(([re]) => re.test(text))?.[1]
+
+// ---- checkpoints (40): the file as it was, before Claude's Edit or Write
+async function snapshot($: EngineInterface, path: string) {
+  const dir = await read($, home)
+  if (!dir) return
+  const id = Date.now()
+  let copy: string | null = null
+  if (await $.fs.exists(path)) {
+    copy = `${dir}/.claude/mods-checkpoints/${await $.session.id()}/${id}-${baseName(path)}`
+    await $.fs.write(copy, await $.fs.read(path))
+  }
+  const point: Checkpoint = { id, path, copy, at: await $.clock.now() }
+  await update($, checkpoints, list => [...list, point].slice(-MAX_CHECKPOINTS))
+}
+
+async function undoCommand($: EngineInterface, rest: string) {
+  const list = await read($, checkpoints)
+  const wanted = rest ? list.filter(c => c.path.endsWith(rest)) : list
+  const point = wanted[wanted.length - 1]
+  if (!point) return rest ? `Không có checkpoint nào cho "${rest}".` : 'Chưa có checkpoint nào trong session này.'
+  if (point.copy) {
+    await $.fs.write(point.path, await $.fs.read(point.copy))
+  } else {
+    const run = await $.process.run(['rm', '--', point.path], { timeoutMs: 5000 })
+    if (run.exitCode !== 0) return `✗ Không xóa được file mới ${point.path}: ${run.stderr.trim()}`
+  }
+  await update($, checkpoints, l => l.filter(c => c.id !== point.id))
+  return point.copy
+    ? `↩ Đã khôi phục ${point.path} về trước lần sửa lúc ${new Date(point.at).toLocaleTimeString()}.`
+    : `↩ Đã xóa ${point.path} (file do Claude tạo mới).`
+}
+
+const checkpointsText = (list: Checkpoint[]) =>
+  list.length
+    ? [
+        'Checkpoint (mới nhất cuối):',
+        ...list.slice(-15).map(c => `  ${new Date(c.at).toLocaleTimeString()}  ${c.copy ? 'sửa' : 'mới'}  ${c.path}`),
+        'Hoàn tác: /mods undo [đuôi tên file]',
+      ].join('\n')
+    : 'Chưa có checkpoint nào trong session này.'
+
+// ---- branch lock (41)
+const PROTECTED_BRANCHES = ['main', 'master', 'production']
+
+function branchLockReason(command: string, branch: string | undefined) {
+  const onProtected = !!branch && PROTECTED_BRANCHES.includes(branch)
+  if (/\bgit\s+commit\b/.test(command) && onProtected) return `commit thẳng lên ${branch}`
+  if (/\bgit\s+push\b/.test(command)) {
+    const named = PROTECTED_BRANCHES.find(b => new RegExp(`(\\s|:)${b}(\\s|$)`).test(command))
+    if (named) return `push thẳng lên ${named}`
+    if (onProtected && !/\s(origin\s+)?[\w./-]+:/.test(command)) return `push từ nhánh ${branch}`
+  }
+  return undefined
+}
+
+// ---- auto-format (42): the project's own formatter, only where it exists
+async function formatFile($: EngineInterface, path: string) {
+  const base = await read($, root)
+  if (!base || !path.startsWith(`${base}/`)) return
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  const prettier = `${base}/node_modules/.bin/prettier`
+  const plans: string[][] = []
+  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'css', 'scss', 'md', 'html', 'yml', 'yaml'].includes(ext)) {
+    if (await $.fs.exists(prettier)) plans.push([prettier, '--write', '--log-level', 'warn', path])
+  } else if (ext === 'py') {
+    plans.push(['ruff', 'format', path], ['black', '-q', path])
+  } else if (ext === 'go') {
+    plans.push(['gofmt', '-w', path])
+  } else if (ext === 'rs') {
+    plans.push(['rustfmt', path])
+  }
+  for (const argv of plans) {
+    try {
+      const run = await $.process.run(argv, { cwd: base, timeoutMs: 20000 })
+      if (run.exitCode === 0) return
+    } catch {
+      // Not installed: try the next formatter.
+    }
+  }
+}
+
+// ---- auto-check (43): one command per project, run after a turn that edited files
+async function runCheck($: EngineInterface) {
+  const command = await read($, checkCommand)
+  if (!command) return
+  const base = (await read($, root)) || undefined
+  $.ui.toast(`⏳ Đang kiểm tra: ${command}`)
+  try {
+    const run = await $.process.run(['sh', '-c', command], { cwd: base, timeoutMs: 180000 })
+    const value: CheckResult = {
+      ok: run.exitCode === 0,
+      command,
+      output: `${run.stdout}${run.stderr}`.trim().split('\n').slice(-12).join('\n'),
+      at: await $.clock.now(),
+    }
+    await update($, check, () => value)
+    $.ui.toast(value.ok ? `✓ Kiểm tra pass: ${command}` : `✗ Kiểm tra lỗi: ${command}`)
+    if (value.ok) void startFx($, 'party')
+  } catch (error) {
+    const value: CheckResult = {
+      ok: false,
+      command,
+      output: error instanceof Error ? error.message : String(error),
+      at: await $.clock.now(),
+    }
+    await update($, check, () => value)
+  }
+}
+
+async function checkCommandText($: EngineInterface, rest: string) {
+  if (rest === 'off') {
+    await update($, checkCommand, () => '')
+    await saveProjectValue($, 'checks', '')
+    return 'Đã bỏ lệnh kiểm tra của dự án này.'
+  }
+  if (rest === 'run' || (!rest && (await read($, checkCommand)))) {
+    await runCheck($)
+    const r = await read($, check)
+    return r ? `${r.ok ? '✓ pass' : '✗ lỗi'}: ${r.command}\n${r.output}` : 'Chưa đặt lệnh kiểm tra.'
+  }
+  if (!rest) return 'Đặt lệnh kiểm tra cho dự án: /mods check "pnpm test" · chạy: /mods check run · bỏ: /mods check off'
+  const command = rest.replace(/^["']|["']$/g, '')
+  await update($, checkCommand, () => command)
+  await saveProjectValue($, 'checks', command)
+  return `Lệnh kiểm tra của dự án: ${command}${(await read($, settings)).autocheck ? '' : '\n(Bật tự chạy sau mỗi lượt: /mods autocheck)'}`
+}
+
+// ---- commit (44): Haiku drafts a message from the staged diff
+async function draftCommit($: EngineInterface) {
+  const base = await read($, root)
+  if (!(await gitIsSafe($, base))) {
+    await update($, commitDraft, () => ({
+      message: '',
+      files: 0,
+      note: 'Bỏ qua: config của repo này khai báo chương trình git sẽ chạy.',
+    }))
+    return
+  }
+  const staged = await $.process.run(
+    [...SAFE_GIT, '-C', base, 'diff', '--cached', '--no-ext-diff', '--no-textconv', '--stat'],
+    {
+      timeoutMs: 5000,
+    },
+  )
+  const count = staged.stdout.split('\n').filter(l => l.includes('|')).length
+  if (count === 0) {
+    await update($, commitDraft, () => ({
+      message: '',
+      files: 0,
+      note: 'Chưa có gì được stage. Bấm "Stage tất cả" hoặc tự git add.',
+    }))
+    return
+  }
+  const patch = await $.process.run(
+    [...SAFE_GIT, '-C', base, 'diff', '--cached', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all'],
+    { timeoutMs: 10000 },
+  )
+  const reply = await $.model.complete({
+    model: 'haiku',
+    maxTokens: 300,
+    timeoutMs: 20000,
+    system:
+      'Write one git commit message for this staged diff in Conventional Commits form: a subject line under 72 characters (type: summary), then optionally a blank line and a short body saying why. Output only the message.',
+    prompt: `${staged.stdout}\n\n${patch.stdout.slice(0, 12000)}`,
+  })
+  const message = reply.isAnswered
+    ? reply.text
+        .trim()
+        .replace(/^```\w*\n?|```$/g, '')
+        .trim()
+    : ''
+  await update($, commitDraft, () => ({
+    message,
+    files: count,
+    note: reply.isAnswered ? '' : 'Haiku không trả lời; gõ message vào ô bên dưới.',
+  }))
+}
+
+// git add -A, then unstage what the guard protects (.env, keys): staging
+// everything must not quietly put a secret into the next commit.
+async function stageAll($: EngineInterface, base: string) {
+  await $.process.run([...SAFE_GIT, '-C', base, 'add', '-A'], { timeoutMs: 10000 })
+  const staged = await $.process.run([...SAFE_GIT, '-C', base, 'diff', '--cached', '--name-only'], { timeoutMs: 5000 })
+  const secret = staged.stdout.split('\n').filter(f => f && isSecretFile(f))
+  if (secret.length) {
+    await $.process.run([...SAFE_GIT, '-C', base, 'reset', '-q', '--', ...secret], { timeoutMs: 5000 })
+    $.ui.toast(`🔐 Đã bỏ stage: ${secret.join(', ')}`)
+  }
+}
+
+async function commitNow($: EngineInterface) {
+  const draft = await read($, commitDraft)
+  if (!draft?.message) return
+  const base = await read($, root)
+  if (!(await gitIsSafe($, base))) return
+  const run = await $.process.run([...SAFE_GIT, '-C', base, 'commit', '-m', draft.message], { timeoutMs: 30000 })
+  $.ui.toast(
+    run.exitCode === 0
+      ? `✓ Đã commit: ${draft.message.split('\n')[0]}`
+      : `✗ Commit lỗi: ${run.stderr.trim().slice(0, 200)}`,
+  )
+  if (run.exitCode === 0) await update($, commitDraft, () => null)
+  await refreshGit($)
+}
+
+// ---- compact (45): what a summary must keep
+async function compactNotes($: EngineInterface) {
+  const touched = await read($, files)
+  const list = await read($, rules)
+  const open = (await read($, todos)).filter(t => !t.done)
+  return [
+    'When summarizing, keep these explicitly:',
+    touched.length ? `- Files edited this session: ${touched.join(', ')}` : '',
+    list.length ? `- Project rules the user set: ${list.join(' | ')}` : '',
+    open.length ? `- Open TODOs: ${open.map(t => t.text).join(' | ')}` : '',
+    '- Decisions made and why, and the exact next step that was in progress.',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+// ---- todos (46): TODO/FIXME lines written into code, and "- [ ]" items in answers
+function todosIn(text: string, file?: string): Todo[] {
+  const found: Todo[] = []
+  for (const line of text.split('\n')) {
+    const code = line.match(/\b(?:TODO|FIXME)\b[:\s-]*(.{3,160})/)
+    const box = line.match(/^\s*[-*] \[ \] (.{3,160})/)
+    const text = (code?.[1] ?? box?.[1])?.replace(/\s*(\*\/|-->)\s*$/, '').trim()
+    if (text) found.push({ text, done: false, ...(code && file ? { file } : {}) })
+  }
+  return found.slice(0, 10)
+}
+
+async function addTodos($: EngineInterface, items: Todo[]) {
+  if (items.length === 0) return
+  const list = await update($, todos, l => {
+    const seen = new Set(l.map(t => t.text))
+    return [...l, ...items.filter(t => !seen.has(t.text))].slice(-100)
+  })
+  await saveProjectValue($, 'todos', list)
+}
+
+async function setTodos($: EngineInterface, change: (l: Todo[]) => Todo[]) {
+  const list = await update($, todos, change)
+  await saveProjectValue($, 'todos', list)
+}
+
+async function setNotes($: EngineInterface, change: (l: string[]) => string[]) {
+  const list = await update($, notes, change)
+  await saveProjectValue($, 'notes', list)
+}
+
+// ---- standup (48): yesterday and today from the stats and the journal
+async function standupText($: EngineInterface) {
+  const stats = await loadStats($)
+  const now = await $.clock.now()
+  const today = localDay(now)
+  const yesterday = Object.keys(stats)
+    .filter(d => d < today)
+    .sort()
+    .pop()
+  const day = (d: string | undefined) =>
+    d
+      ? Object.entries(stats[d] ?? {}).map(
+          ([name, r]) => `  • ${name}: ${r.turns} lượt, ${duration(r.seconds * 1000)}, $${r.usd.toFixed(2)}`,
+        )
+      : []
+  let edited: string[] = []
+  try {
+    const journal = await $.fs.read(`${await read($, home)}/.claude/mods-journal.md`)
+    edited = journal
+      .split('\n## ')
+      .filter(entry => (yesterday && entry.startsWith(yesterday)) || entry.startsWith(today))
+      .flatMap(entry => entry.split('\n').filter(l => l.startsWith('- File đã sửa:')))
+      .map(l => l.replace('- File đã sửa: ', ''))
+      .filter(l => l !== 'không có')
+  } catch {
+    // No journal yet.
+  }
+  const open = (await read($, todos)).filter(t => !t.done)
+  return [
+    `Standup ${today}`,
+    `Hôm qua${yesterday ? ` (${yesterday})` : ''}:`,
+    ...(day(yesterday).length ? day(yesterday) : ['  • (không có số liệu)']),
+    'Hôm nay:',
+    ...(day(today).length ? day(today) : ['  • (chưa có)']),
+    ...(edited.length
+      ? ['File đã động tới:', `  • ${[...new Set(edited.join(', ').split(', '))].slice(0, 15).join(', ')}`]
+      : []),
+    ...(open.length ? ['Đang mở:', ...open.slice(0, 8).map(t => `  • ${t.text}`)] : []),
+  ].join('\n')
+}
+
+// ---- handoff (49): a summary of this session sent to another one
+async function handoffCommand($: EngineInterface, rest: string) {
+  if (!rest) return 'Cách dùng: /mods handoff <tên hoặc id session> (xem /mods sessions)'
+  const target = (await read($, peers)).find(
+    p => !p.isSelf && (p.name === rest || p.id.startsWith(rest) || p.name.startsWith(rest)),
+  )
+  if (!target) return `Không thấy session "${rest}". Xem danh sách: /mods sessions`
+  const transcript = (await $.session.messages())
+    .slice(-30)
+    .map(m => `${m.role === 'user' ? 'USER' : 'CLAUDE'}: ${m.text.slice(0, 600)}`)
+    .join('\n\n')
+    .slice(-15000)
+  const reply = await $.model.complete({
+    model: 'haiku',
+    maxTokens: 500,
+    timeoutMs: 30000,
+    system:
+      'Write a handoff note for another Claude session taking over this work: the goal, what is done, what is in progress, the next concrete steps, and files involved. Bullets, at most 12 lines, in the language the user wrote in.',
+    prompt: `${transcript}\n\nFiles edited: ${(await read($, files)).join(', ') || 'none'}`,
+  })
+  if (!reply.isAnswered) return `✗ Không tóm tắt được (${reply.reason}).`
+  const from = (await read($, project)) || 'một session khác'
+  const sent = await $.session.send({
+    to: { sessionId: target.id },
+    text: `Bàn giao từ ${from}:\n${reply.text.trim()}`,
+  })
+  return sent.isDelivered
+    ? `✓ Đã bàn giao cho ${target.name}:\n${reply.text.trim()}`
+    : `✗ Không gửi được tới ${target.name}: ${sent.reason}`
+}
+
+// ---- copy (50): the nth latest code block in Claude's answers
+async function copyCommand($: EngineInterface, rest: string) {
+  const nth = Math.max(1, Number.parseInt(rest, 10) || 1)
+  const blocks = (await $.session.messages())
+    .filter(m => m.role === 'assistant')
+    .flatMap(m => [...m.text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map(x => x[1] ?? ''))
+  const block = blocks[blocks.length - nth]
+  if (block === undefined) return blocks.length ? `Chỉ có ${blocks.length} khối code.` : 'Chưa có khối code nào.'
+  const copied = await $.ui.copy({ text: block.replace(/\n$/, '') })
+  const lines = block.split('\n').length - 1
+  return copied.isCopied
+    ? `📋 Đã copy khối code thứ ${nth} từ cuối (${lines} dòng).`
+    : `✗ Không copy được (${copied.reason}).`
+}
+
+// ---- context (51)
+async function refreshBreakdown($: EngineInterface) {
+  const u = await $.session.usage({ breakdown: 'summary' })
+  const b = u.context.breakdown
+  if (!b) {
+    await update($, breakdown, () => null)
+    return
+  }
+  const value: Breakdown = {
+    categories: b.categories
+      .filter(c => c.tokens > 0 && !c.isDeferred)
+      .map(c => ({ name: c.name, tokens: c.tokens, color: c.color })),
+    total: b.totalTokens,
+    max: b.maxTokens,
+  }
+  await update($, breakdown, () => value)
+}
+
+const openTodo = ($: EngineInterface) => $.ui.open({ id: TODO_PANE, title: 'TODO' })
+const openNotes = ($: EngineInterface) => $.ui.open({ id: NOTES_PANE, title: 'Ghi chú' })
+const openCommit = ($: EngineInterface) => $.ui.open({ id: COMMIT_PANE, title: 'Commit' })
+const openContext = ($: EngineInterface) => $.ui.open({ id: CONTEXT_PANE, title: 'Context' })
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -1052,6 +1512,15 @@ async function helpText($: EngineInterface) {
     '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
     '  find <x>  tìm x trong hội thoại này',
     'Công cụ:',
+    '  budget <$>|off     giới hạn chi tiêu theo ngày',
+    '  undo [file] · checkpoints   hoàn tác lần sửa file gần nhất của Claude',
+    '  check "<lệnh>"|run|off      lệnh kiểm tra của dự án',
+    '  commit             Haiku soạn commit message từ phần đã stage',
+    '  todo [x] · note [x]         bảng TODO và ghi chú của dự án',
+    '  standup            tóm tắt hôm qua/hôm nay, copy sẵn',
+    '  handoff <session>  bàn giao việc đang làm cho session khác',
+    '  copy [n]           copy khối code thứ n từ cuối',
+    '  context            context đang dùng cho những gì',
     '  stats              chi phí, số lượt, thời gian 7 ngày gần nhất',
     '  abbrev [;k nội dung]  xem / thêm / xóa (bỏ nội dung) từ viết tắt',
     '  rule <x> · rules · unrule <số>  luật riêng của dự án này',
@@ -1075,7 +1544,7 @@ export const register: Register = on => {
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | theme <x> | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
+          'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
       })
     } catch {
       $.ui.toast('terminal-polish: không đăng ký được /mods')
@@ -1095,6 +1564,16 @@ export const register: Register = on => {
       const all = await loadRules($)
       const list = Array.isArray(all[rootPath]) ? all[rootPath] : []
       await update($, rules, () => list)
+      const savedTodos = await $.store.get('todos')
+      const todoList =
+        savedTodos && typeof savedTodos === 'object' ? (savedTodos as Record<string, unknown>)[rootPath] : null
+      await update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : []))
+      const savedNotes = await loadProjectList($, 'notes')
+      await update($, notes, () => savedNotes)
+      const savedChecks = await $.store.get('checks')
+      const command =
+        savedChecks && typeof savedChecks === 'object' ? (savedChecks as Record<string, unknown>)[rootPath] : ''
+      await update($, checkCommand, () => (typeof command === 'string' ? command : ''))
     } catch {
       // The band falls back to its own label.
     }
@@ -1146,6 +1625,7 @@ export const register: Register = on => {
       const homeDir = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
       await update($, home, () => homeDir)
       await refreshHeat($)
+      await refreshSpend($)
       await buildSplash($)
       const selfId = await $.session.id()
       const dir = `${homeDir}/.claude/sessions`
@@ -1173,6 +1653,40 @@ export const register: Register = on => {
         return placed(await openPrompts($), 'Đã mở prompt nhanh.')
       case 'settings':
         return placed(await openSettings($), 'Đã mở tab cài đặt.')
+      case 'budget':
+        return { text: await budgetCommand($, args.slice(word.length).trim()) }
+      case 'undo':
+        return { text: await undoCommand($, args.slice(word.length).trim()) }
+      case 'checkpoints':
+        return { text: checkpointsText(await read($, checkpoints)) }
+      case 'check':
+        return { text: await checkCommandText($, args.slice(word.length).trim()) }
+      case 'commit':
+        await draftCommit($)
+        return placed(await openCommit($), 'Đã soạn commit message.')
+      case 'todo': {
+        const text = args.slice(word.length).trim()
+        if (text) await addTodos($, [{ text, done: false }])
+        return placed(await openTodo($), text ? `Đã thêm TODO: ${text}` : 'Đã mở bảng TODO.')
+      }
+      case 'notes':
+      case 'note': {
+        const text = args.slice(word.length).trim()
+        if (text) await setNotes($, l => [...l, text].slice(-50))
+        return placed(await openNotes($), text ? `Đã ghi: ${text}` : 'Đã mở ghi chú.')
+      }
+      case 'standup': {
+        const text = await standupText($)
+        const copied = await $.ui.copy({ text })
+        return { text: `${text}${copied.isCopied ? '\n📋 Đã copy.' : ''}` }
+      }
+      case 'handoff':
+        return { text: await handoffCommand($, args.slice(word.length).trim()) }
+      case 'copy':
+        return { text: await copyCommand($, args.slice(word.length).trim()) }
+      case 'context':
+        await refreshBreakdown($)
+        return placed(await openContext($), 'Đã mở phân tích context.')
       case 'theme': {
         const name = args.slice(word.length).trim().toLowerCase()
         if (!(name in THEMES)) {
@@ -1226,7 +1740,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
-    const value: Turn = { tools: 0, failed: 0 }
+    const value: Turn = { tools: 0, failed: 0, edits: 0 }
     await update($, turn, () => value)
     await update($, autoModel, () => null)
     await update($, splash, () => false)
@@ -1253,10 +1767,39 @@ export const register: Register = on => {
   })
 
   // Abbreviations (15): expand `;key` before the prompt is sent.
+  // Before a typed prompt leaves: secrets (39), budget (38), abbreviations (15).
+  // A prompt starting with >> goes through both checks, the >> removed.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer' || !(await read($, settings)).abbrev) return next(e)
-    const text = expandAbbrevs(e.text, await loadAbbrevs($))
+    if (e.origin.kind !== 'composer') return next(e)
+    const s = await read($, settings)
+    const isForced = e.text.startsWith(BYPASS)
+    let text = isForced ? e.text.slice(BYPASS.length).trimStart() : e.text
+    if (!isForced && s.secrets) {
+      const kind = secretIn(text)
+      if (kind) {
+        return {
+          drop: `🔐 Prompt có vẻ chứa ${kind}, chưa gửi. Xóa nó đi, hoặc gửi lại với "${BYPASS}" ở đầu nếu chắc chắn.`,
+        }
+      }
+    }
+    if (!isForced && s.budget) {
+      const limit = await read($, budgetLimit)
+      const spent = await read($, spentToday)
+      if (limit > 0 && spent >= limit) {
+        return {
+          drop: `💰 Đã dùng $${spent.toFixed(2)} / $${limit.toFixed(2)} hôm nay. Gửi lại với "${BYPASS}" ở đầu để vẫn gửi, hoặc /mods budget off.`,
+        }
+      }
+    }
+    if (s.abbrev) text = expandAbbrevs(text, await loadAbbrevs($))
     return next(text === e.text ? e : { ...e, text })
+  })
+
+  // Compact (45): tell the summary what it must keep.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId || !(await read($, settings)).compactplus) return next(e)
+    const extra = await compactNotes($)
+    return next({ ...e, instructions: [e.instructions, extra].filter(Boolean).join('\n\n') })
   })
 
   // Project rules (17): appended to the system prompt, last.
@@ -1302,6 +1845,16 @@ export const register: Register = on => {
     } catch {
       // Exits stay fast; a lost entry is the cost.
     }
+    try {
+      // Checkpoints live only as long as the session that can undo them.
+      const dir = await read($, home)
+      const id = await $.session.id()
+      if (dir && /^[\w-]+$/.test(id)) {
+        await $.process.run(['rm', '-rf', '--', `${dir}/.claude/mods-checkpoints/${id}`], { timeoutMs: 3000 })
+      }
+    } catch {
+      // Left for the next cleanup.
+    }
     return next(e)
   })
 
@@ -1312,7 +1865,10 @@ export const register: Register = on => {
   const guardFailed = { deny: 'terminal-polish: bộ chặn lỗi, đã chặn cho an toàn.' }
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const reason = (await read($, settings)).guard ? dangerOf(e.command) : undefined
+    const s = await read($, settings)
+    const reason =
+      (s.guard ? dangerOf(e.command) : undefined) ??
+      (s.branchlock ? branchLockReason(e.command, (await read($, git))?.branch) : undefined)
     if (!reason) return next(e)
     $.ui.toast(`🛡 Đã chặn: ${reason}`)
     return guard(reason)
@@ -1341,6 +1897,7 @@ export const register: Register = on => {
       began = await $.clock.now()
       await update($, calls, list => [...list, call].slice(-100))
       await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
+      if (path && e.tool !== 'Read' && (await read($, settings)).checkpoints) await snapshot($, path)
     } catch {
       // The row is only display.
     }
@@ -1364,6 +1921,13 @@ export const register: Register = on => {
       }
       if (!isFailed && path && e.tool !== 'Read') {
         await update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30))
+        await update($, turn, t => (t ? { ...t, edits: t.edits + 1 } : t))
+        const s = await read($, settings)
+        if (s.format) await formatFile($, path)
+        if (s.todos) {
+          const written = e.tool === 'Edit' ? e.new_string : e.tool === 'Write' ? e.content : ''
+          await addTodos($, todosIn(written, path))
+        }
       }
     } catch {
       // The row is only display.
@@ -1378,6 +1942,16 @@ export const register: Register = on => {
     const s = await read($, settings)
     const t = await read($, turn)
     const done: LastTurn = { seconds: Math.round(e.durationMs / 1000), tools: t?.tools ?? 0, failed: t?.failed ?? 0 }
+    try {
+      if (s.todos && e.reason === 'answer')
+        await addTodos(
+          $,
+          todosIn(e.answer).filter(x => !x.file),
+        )
+      if (s.autocheck && (t?.edits ?? 0) > 0) void runCheck($)
+    } catch {
+      // Extras never hold the turn up.
+    }
     await update($, last, () => done)
     await update($, history, list => [...list, done].slice(-20))
     await update($, turn, () => null)
@@ -1407,6 +1981,16 @@ export const register: Register = on => {
       await update($, lastUsd, () => use?.usd ?? before)
       await recordStats($, (await read($, project)) || 'claude', done, spent)
       await refreshHeat($)
+      await refreshSpend($)
+      const limit = await read($, budgetLimit)
+      const spentNow = await read($, spentToday)
+      const day = localDay(await $.clock.now())
+      if (s.budget && limit > 0 && spentNow >= limit * 0.8 && (await read($, budgetWarned)) !== day) {
+        await update($, budgetWarned, () => day)
+        $.ui.toast(
+          `💰 Đã dùng ${Math.round((spentNow / limit) * 100)}% ngân sách hôm nay ($${spentNow.toFixed(2)} / $${limit.toFixed(2)})`,
+        )
+      }
 
       // Auto-compact (13): once per crossing; compacting runs after this turn has closed.
       const pct = use?.percent ?? 0
@@ -1489,6 +2073,19 @@ export const register: Register = on => {
     for (const l of limits)
       segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
     if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink })
+    const limit = await read($, budgetLimit)
+    if (s.budget && limit > 0) {
+      const spent = await read($, spentToday)
+      segments.push({
+        text: `💰 $${spent.toFixed(2)}/$${limit.toFixed(0)}`,
+        color: P.pink,
+        meter: { pct: Math.round((spent / limit) * 100) },
+      })
+    }
+    const checked = await read($, check)
+    if (checked) segments.push({ text: `${checked.ok ? '✓' : '✗'} check`, color: checked.ok ? P.ok : P.err })
+    const openTodos = (await read($, todos)).filter(x => !x.done).length
+    if (s.todos && openTodos > 0) segments.push({ text: `☐ ${openTodos}`, color: P.violet })
     if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
     if (working && pick) segments.push({ text: `⚡${pick}`, color: P.info })
 
@@ -1977,6 +2574,201 @@ export const register: Register = on => {
             <Text>{h.snippet}</Text>
           </Box>
         ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: TODO_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const list = await read($, todos)
+    const open = list.filter(x => !x.done).length
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>
+          {open} đang mở · {list.length - open} xong · bấm để đánh dấu
+        </Text>
+        {list.length === 0 && <Text color={P.muted}>Chưa có TODO. Thêm ở ô dưới hoặc /mods todo &lt;việc&gt;.</Text>}
+        {list.map((item, i) => (
+          <Box key={`todo-${i}`} flexDirection="row" gap={1}>
+            <Button
+              key={`todo-toggle-${i}`}
+              label={`${item.done ? '☑' : '☐'} ${item.text}${item.file ? `  (${baseName(item.file)})` : ''}`}
+              plain
+              dimColor={item.done}
+              onPress={() => void setTodos($, l => l.map((x, j) => (j === i ? { ...x, done: !x.done } : x)))}
+            />
+            <Button
+              key={`todo-del-${i}`}
+              label="✕"
+              dimColor
+              onPress={() => void setTodos($, l => l.filter((_, j) => j !== i))}
+            />
+          </Box>
+        ))}
+        <Box flexDirection="row" gap={1} marginTop={1}>
+          <Button
+            key="todo-clear"
+            label="Xóa việc đã xong"
+            dimColor
+            onPress={() => void setTodos($, l => l.filter(x => !x.done))}
+          />
+        </Box>
+        {Input ? (
+          <Input
+            key="todo-new"
+            placeholder="Thêm việc…"
+            submitLabel="Thêm"
+            onSubmit={text => {
+              if (text.trim()) void addTodos($, [{ text: text.trim(), done: false }])
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: NOTES_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const list = await read($, notes)
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>Ghi chú của dự án, giữ qua các session.</Text>
+        {list.length === 0 && <Text color={P.muted}>Chưa có ghi chú.</Text>}
+        {list.map((note, i) => (
+          <Box key={`note-${i}`} flexDirection="row" gap={1}>
+            <Text color={P.accent}>•</Text>
+            <Text wrap="wrap">{note}</Text>
+            <Button
+              key={`note-del-${i}`}
+              label="✕"
+              dimColor
+              onPress={() => void setNotes($, l => l.filter((_, j) => j !== i))}
+            />
+          </Box>
+        ))}
+        {list.length > 0 && (
+          <Box flexDirection="row" marginTop={1}>
+            <Button
+              key="notes-send"
+              label="Gửi ghi chú cho Claude"
+              onPress={() => {
+                void $.prompt.submit({ text: `Ghi chú của tôi cho dự án này:\n${list.map(n => `- ${n}`).join('\n')}` })
+                $.ui.toast('Đã xếp hàng prompt')
+              }}
+            />
+          </Box>
+        )}
+        {Input ? (
+          <Input
+            key="note-new"
+            placeholder="Ghi chú mới…"
+            submitLabel="Lưu"
+            onSubmit={text => {
+              if (text.trim()) void setNotes($, l => [...l, text.trim()].slice(-50))
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: COMMIT_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const draft = await read($, commitDraft)
+    if (!draft) return <Text color={P.muted}>Gõ /mods commit để soạn message từ phần đã stage.</Text>
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>{draft.files} file đã stage · commit chạy không kèm git hooks</Text>
+        {draft.note && <Text color={P.warn}>{draft.note}</Text>}
+        {draft.message && (
+          <Box borderStyle="round" borderColor={P.accent} paddingX={1} marginY={1}>
+            <Text wrap="wrap">{draft.message}</Text>
+          </Box>
+        )}
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {draft.message && <Button key="commit-go" label="Commit" hotkey="1" onPress={() => void commitNow($)} />}
+          {draft.message && (
+            <Button
+              key="commit-copy"
+              label="Copy lệnh (chạy cả hooks)"
+              hotkey="2"
+              onPress={() =>
+                void $.ui.copy({ text: `git commit -m '${draft.message.replace(/'/g, `'\\''`)}'`, surface: e.surface })
+              }
+            />
+          )}
+          <Button key="commit-redo" label="Viết lại" hotkey="3" onPress={() => void draftCommit($)} />
+          {draft.files === 0 && (
+            <Button
+              key="commit-stage"
+              label="Stage tất cả"
+              hotkey="4"
+              onPress={() =>
+                void (async () => {
+                  const base = await read($, root)
+                  if (await gitIsSafe($, base)) await stageAll($, base)
+                  await draftCommit($)
+                })()
+              }
+            />
+          )}
+          <Button key="commit-cancel" label="Hủy" dimColor onPress={() => void update($, commitDraft, () => null)} />
+        </Box>
+        {Input ? (
+          <Input
+            key="commit-edit"
+            placeholder="Hoặc tự gõ message…"
+            submitLabel="Dùng"
+            onSubmit={text => {
+              if (text.trim()) void update($, commitDraft, d => (d ? { ...d, message: text.trim(), note: '' } : d))
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
+    const P = await palette($)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const b = await read($, breakdown)
+    if (!b) return <Text color={P.muted}>Chưa có số liệu (cần ít nhất một lượt).</Text>
+    const width = Math.max(10, e.props.bodyColumns - 34)
+    const top = [...b.categories].sort((x, y) => y.tokens - x.tokens)
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Box flexDirection="row">
+          {meterCells(Math.round((b.total / Math.max(1, b.max)) * 100), Math.min(30, width), P).map(c => (
+            <Text color={c.color}>{c.ch}</Text>
+          ))}
+          <Text color={P.muted}>{`  ${Math.round(b.total / 1000)}k / ${Math.round(b.max / 1000)}k token`}</Text>
+        </Box>
+        {top.map(c => {
+          const cells = Math.max(1, Math.round((c.tokens / Math.max(1, b.total)) * width))
+          return (
+            <Box flexDirection="row">
+              <Text wrap="truncate-end">{c.name.slice(0, 22).padEnd(23)}</Text>
+              <Text color={c.color}>{'█'.repeat(cells)}</Text>
+              <Text color={P.muted}>{` ${(c.tokens / 1000).toFixed(1)}k`}</Text>
+            </Box>
+          )
+        })}
+        <Box marginTop={1}>
+          <Button key="context-refresh" label="Làm mới" dimColor onPress={() => void refreshBreakdown($)} />
+        </Box>
       </Box>
     )
   })
