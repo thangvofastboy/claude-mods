@@ -1,105 +1,237 @@
-# ✨ claude-mods · terminal-polish
+<div align="center">
 
-**Mod giúp giao diện terminal của Claude Code gọn gàng và dễ dùng hơn.**
+<img src="assets/banner.svg" alt="terminal-polish" width="100%"/>
 
-Mod gồm một dải trạng thái phía trên ô prompt, panel danh sách session, bảng hoạt động, prompt nhanh, bộ chặn lệnh nguy hiểm, TL;DR cho câu trả lời dài và thông báo khi Claude làm xong. Mọi thứ dùng qua một lệnh: `/mods`.
+[![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
+![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-23%20passing-a6e3a1?style=for-the-badge)
+![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
+![Themes](https://img.shields.io/badge/themes-6-f5c2e7?style=for-the-badge)
 
-Màu sắc lấy theo theme Claude Code bạn đang dùng, nên hợp cả nền sáng lẫn nền tối. Mod không cần dependency và không cần `npm install`.
+**Một lệnh `/mods`, cả chục thứ tiện lợi.**<br/>
+Dải trạng thái sống động · bảng điều khiển · 6 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
+
+[🚀 Cài đặt](#-cài-đặt) ·
+[✨ Tính năng](#-tính-năng) ·
+[⌨️ Lệnh](#️-bảng-lệnh-mods) ·
+[🎨 Theme](#-theme) ·
+[⚙️ Cài đặt](#️-tab-cài-đặt) ·
+[🔄 Cập nhật](#-cập-nhật--phát-hành) ·
+[🛠️ Phát triển](#️-phát-triển) ·
+[❓ FAQ](#-faq)
+
+<img src="assets/preview.svg" alt="Xem trước: dải trạng thái, badge tool và bảng hoạt động" width="100%"/>
+
+</div>
 
 ---
 
-## Tính năng
+## 🚀 Cài đặt
 
-| Nhóm | Tính năng |
-| --- | --- |
-| 📟 **Dải trạng thái** | `◆ dự-án ⎇ main ±3 │ ✓ 12s · 5 tool │ ctx 42% $0.31` ngay trên ô prompt: nhánh git, số file đang thay đổi, kết quả lượt trước, mức dùng context (đổi màu khi gần đầy) và chi phí. Bên phải có nút **Session / Bảng / Prompt / Ẩn**. |
-| 🗂️ **Sessions** | Các session Claude đang chạy trên máy, tự cập nhật mỗi 3 giây: tên, trạng thái bận/rảnh, thư mục. Có thể **nhắn tin** cho session khác, hoặc **copy lệnh resume** để mở nó ở terminal khác. |
-| 📊 **Bảng hoạt động** | Các subagent đang chạy, git, biểu đồ tốc độ 20 lượt gần nhất (`▁▃▇▂`), file Claude đã sửa (**bấm để xem diff có màu**) và các tool gần đây kèm ✓ / ✗. |
-| ⚡ **Prompt nhanh** | Lưu những prompt hay dùng thành nút bấm, phím `1`–`9`. Khi Claude đang bận, prompt được xếp hàng và chạy khi rảnh. |
-| 🛡️ **Chặn lệnh nguy hiểm** | Chặn `rm -rf /` (hoặc `~`, `*`), force-push lên `main`/`master` (vẫn cho phép `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, và việc sửa `.env`, `*.pem`, `id_rsa*` (vẫn cho phép `.env.example`). |
-| 📝 **TL;DR** | Câu trả lời dài trên 1200 ký tự được Haiku tóm tắt thành 1–2 câu, hiện ngay bên dưới. |
-| 🔔 **Báo khi xong** | Lượt chạy từ 20 giây trở lên: hiện thông báo của hệ điều hành; tuỳ chọn thêm âm thanh hoặc đọc to. |
-| 💬 **Thẻ tin nhắn** | Prompt bạn gõ được đóng khung bo góc, dễ phân biệt với câu trả lời. |
-| 🎨 **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
-| ⚙️ **Tab Cài đặt** | `/mods settings` hoặc nút **Cài đặt**: bật/tắt mọi tính năng bằng một lần bấm, có nút **Bật hết** và **Mặc định**. Cài đặt được giữ ở các session sau. |
-| 📈 **Quota & context** | Thanh `5h 34% · 7d 12%` trên dải trạng thái. Khi context từ 85%: nhắc `/compact`, hoặc tự compact nếu bật `autocompact`. |
-| 💵 **Thống kê** | `/mods stats`: số lượt, thời gian, tool và chi phí của 7 ngày gần nhất, cùng số liệu hôm nay theo từng dự án. |
-| ⌨️ **Từ viết tắt** | `/mods abbrev ;fix Sửa lỗi này và chạy lại test`; sau đó gõ `;fix` trong prompt là tự bung ra. |
-| ✂️ **Đoạn bôi đen** | Bôi đen một đoạn trong transcript (chế độ fullscreen) rồi bấm **Chọn** để giải thích, dịch Việt ⇄ Anh, tóm tắt hoặc copy sạch. |
-| 📏 **Luật dự án** | `/mods rule luôn dùng pnpm`: luật riêng cho từng dự án, tự thêm vào system prompt. Xem bằng `/mods rules`, xóa bằng `/mods unrule <số>`. |
-| 🔔 **Tool cho Claude** | Claude có tool `notify_me` để chủ động báo bạn, cùng 2 subagent `terminal-polish:reviewer` (review, chỉ đọc) và `terminal-polish:tester` (viết và chạy test). |
-| ⚡ **Tự chọn model** | *(thử nghiệm, mặc định tắt)* câu hỏi đơn giản tự chạy bằng Haiku. Dải trạng thái hiện `⚡haiku` khi chế độ này được dùng. |
-| 📓 **Nhật ký** | Khi đóng session, ghi số lượt, thời gian, chi phí và các file đã sửa vào `~/.claude/mods-journal.md`. |
-| 🔎 **Tìm trong hội thoại** | `/mods find <từ khóa>` mở panel kết quả, kèm đoạn văn xung quanh chỗ tìm thấy. |
-| ⏱ **Hẹn giờ** | `/mods timer 25`: đếm ngược trên dải trạng thái, hết giờ thì báo. |
-| 📦 **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào là mở ra đầy đủ. |
-| 🎨 **Theme** | `/mods theme catppuccin \| tokyonight \| dracula \| nord \| gruvbox \| auto` (hoặc chọn trong tab Cài đặt). `auto` theo theme của Claude Code; các theme còn lại dùng bảng màu nền tối chính thức của chúng. |
-| 🌈 **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo ở màn chào được tô chuyển màu theo theme. |
-| ▰ **Thanh đo** | Context và quota hiện dạng `ctx ▰▰▰▱▱▱ 42%`, màu chuyển dần từ xanh sang vàng rồi đỏ. |
-| 🟢 **Viền theo trạng thái** | Viền dải trạng thái xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước lỗi. |
-| ⚡ **Powerline** | *(mặc định tắt, cần font Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
-| ✨ **Hiệu ứng** | Vệt sáng chạy ngang khi Claude đang làm; pháo hoa khi test pass hoặc khi xong một việc dài không lỗi (chỉ trên terminal). |
-| 👋 **Màn chào** | Logo chuyển màu, lời chào theo giờ, tóm tắt lần làm việc trước và mẹo dùng. Tự ẩn khi bạn gửi prompt đầu tiên. |
-| 🗓️ **Heatmap** | Số lượt mỗi ngày trong 8 tuần, kiểu ô màu GitHub, trong bảng hoạt động. |
-| 🏷️ **Nhãn file & thẻ hover** | File đã sửa có nhãn màu theo loại (`TS`, `PY`, `MD`…). Rê chuột lên một dòng tool hoặc file sẽ hiện thẻ chi tiết: lệnh đầy đủ, thời gian chạy, đường dẫn (chế độ fullscreen). |
-| 🖼️ **Ảnh** | Logo PNG thật ở màn chào trên terminal hỗ trợ hiển thị ảnh (kitty, Ghostty); terminal khác hiện ký tự thay thế. |
-| 🏷️ **Badge tool** | Dòng của các tool một dòng (Bash, Read, Grep, Glob, Agent, Web, MCP) có nhãn màu kèm ✓ / ✗ / ◌. Edit, Write và TodoWrite vẫn giữ cách hiển thị gốc để không mất diff. |
+Gõ trong Claude Code:
 
-## Cài đặt
-
-Trong Claude Code:
-
-```
+```text
 /plugin marketplace add thangvofastboy/claude-mods
 /plugin install terminal-polish@claude-mods
 ```
 
-Rồi gõ `/mods` để xem hướng dẫn.
+Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** để bật/tắt từng tính năng bằng một cú bấm.
 
-## Bảng lệnh `/mods`
+> [!TIP]
+> Mở terminal rộng từ **110 cột** trở lên ở chế độ fullscreen để các bảng nằm thành sidebar cạnh hội thoại. Terminal hẹp hơn thì bảng hiện ngay trên ô prompt.
+
+---
+
+## ✨ Tính năng
+
+### 🖥️ Giao diện
+
+| | Tính năng | Mô tả |
+| :-: | --- | --- |
+| 📟 | **Dải trạng thái** | `◆ dự-án ⎇ main ±3 │ ✓ 12s · 5 tool │ ctx ▰▰▰▱▱▱ 42% │ 5h 34% │ $0.31` ngay trên ô prompt, kèm các nút **Session · Bảng · Prompt · Cài đặt · Chọn · Ẩn**. |
+| 🟢 | **Viền theo trạng thái** | Xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước có lỗi. |
+| 🌈 | **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo được tô chuyển màu theo theme. |
+| ▰ | **Thanh đo màu** | Context, quota và ngân sách hiện dạng `▰▰▰▱▱▱`, chuyển dần từ xanh sang vàng rồi đỏ. |
+| ✨ | **Hiệu ứng** | Vệt sáng chạy ngang khi Claude đang làm; pháo hoa 🎉 khi test pass hoặc xong một việc dài không lỗi. |
+| 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; tự ẩn khi bạn gửi prompt đầu tiên. |
+| 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
+| 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
+| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ được đóng khung bo góc, dễ phân biệt với câu trả lời. |
+| 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
+| ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
+| 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. |
+| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một thẻ có màu và viền theo loại hiện vài giây trên dải trạng thái. |
+| 🖱️ | **Rê chuột đổi màu** | Rê chuột lên dòng tool thì dòng đổi màu; bấm mới mở chi tiết. |
+
+### 📊 Bảng điều khiển
+
+| | Bảng | Có gì |
+| :-: | --- | --- |
+| 🗂️ | **Sessions** | Các session Claude đang chạy trên máy, bận/rảnh; nhắn tin sang session khác, copy lệnh resume. |
+| 📈 | **Hoạt động** | Subagent, git, biểu đồ tốc độ, heatmap 8 tuần, file đã sửa có nhãn màu theo loại (bấm để xem **diff**), các tool gần đây ở dạng gọn: rê chuột thì dòng đổi màu, bấm **▸** để mở khung chi tiết (lệnh đầy đủ, trạng thái, thời gian chạy). |
+| ⚡ | **Prompt nhanh** | Lưu prompt hay dùng thành nút bấm, phím tắt `1`–`9`. |
+| ☐ | **TODO** | Tự gom `TODO`/`FIXME` Claude viết vào code và các mục `- [ ]` trong câu trả lời; bấm để đánh dấu xong. |
+| 📌 | **Ghi chú** | Ghi chú riêng từng dự án, có nút gửi cho Claude. |
+| 📝 | **Commit** | Haiku soạn commit message theo Conventional Commits từ phần đã stage. |
+| 🧠 | **Context** | Context đang bị chiếm bởi những gì, kèm thanh màu cho từng phần. |
+| ✂️ | **Đoạn bôi đen** | Giải thích, dịch Việt ⇄ Anh, tóm tắt, hoặc copy sạch đoạn bạn vừa bôi đen. |
+| 🔎 | **Tìm kiếm** | Tìm trong hội thoại hiện tại, kèm đoạn văn xung quanh chỗ tìm thấy. |
+| ⚙️ | **Cài đặt** | Bật/tắt mọi tính năng và chọn theme. |
+
+### 🛡️ An toàn
+
+| | Tính năng | Mô tả |
+| :-: | --- | --- |
+| 🛑 | **Chặn lệnh nguy hiểm** | `rm -rf` lên `/`, `~`, `$HOME` (cả dạng `~/*`, `"$HOME"`, `-r -f`), force-push lên `main`/`master` (cả `-fu`, `+main`; vẫn cho `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, sửa `.env`, `*.pem`, `id_rsa*`. Áp dụng cho cả tool **Bash** lẫn **Monitor**. |
+| 🔐 | **Quét secret** | Prompt có API key (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWT, private key hay `password=…` sẽ bị giữ lại. Gửi lại với **`>>`** ở đầu nếu chắc chắn. |
+| ↩️ | **Checkpoint & hoàn tác** | Bản cũ của file được lưu trước mỗi lần Claude sửa; `/mods undo` để khôi phục. |
+| 🌿 | **Khóa nhánh** | *(tùy chọn)* chặn commit/push thẳng lên `main`, `master`, `production`. |
+| 👀 | **Lệnh luôn hiện đủ** | Badge và bảng hoạt động không bao giờ cắt mất phần lệnh mà không báo: dòng rút gọn luôn có `…` và số dòng còn lại. |
+| 🧱 | **Git an toàn** | Mod không chạy git trong repo mà config cục bộ khai báo chương trình (filter, fsmonitor, textconv…), và không đi vào submodule. |
+
+### 💰 Tiết kiệm & năng suất
+
+| | Tính năng | Mô tả |
+| :-: | --- | --- |
+| 💰 | **Ngân sách** | `/mods budget 5`: giới hạn $5/ngày. Đến 80% thì nhắc; vượt thì giữ prompt lại, kể cả prompt từ `/loop` hay từ panel (gửi lại với `>>` để vẫn gửi). Sang ngày mới thì tự mở lại. |
+| 💵 | **Thống kê** | `/mods stats`: lượt, thời gian, tool, chi phí theo ngày và theo dự án. |
+| 🗜️ | **Compact thông minh** | Nhắc `/compact` khi context từ 85% (hoặc tự compact); bản tóm tắt được dặn giữ file đã sửa, luật dự án và TODO đang mở. |
+| 📝 | **TL;DR** | Câu trả lời dài được Haiku tóm tắt 1–2 câu ngay bên dưới. |
+| 🔔 | **Báo khi xong** | Thông báo hệ điều hành khi lượt chạy từ 20 giây trở lên; tùy chọn âm thanh và đọc to. |
+| ⌨️ | **Từ viết tắt** | `/mods abbrev ;fix Sửa lỗi này và chạy lại test`, rồi gõ `;fix` trong prompt là tự bung ra. |
+| 📏 | **Luật dự án** | `/mods rule luôn dùng pnpm`: tự thêm vào system prompt của dự án đó. |
+| ✅ | **Tự kiểm tra** | `/mods check "pnpm test"`; bật `autocheck` để tự chạy sau mỗi lượt có sửa file. |
+| 🧹 | **Tự format** | *(tùy chọn)* prettier, ruff/black, gofmt, rustfmt sau khi Claude sửa file. |
+| 📣 | **Standup** | `/mods standup`: tóm tắt hôm qua và hôm nay, copy sẵn để dán. |
+| 🤝 | **Bàn giao** | `/mods handoff <session>`: tóm tắt việc đang làm rồi gửi sang session khác. |
+| 📋 | **Copy code** | `/mods copy`: copy khối code gần nhất trong câu trả lời. |
+| ⏱ | **Hẹn giờ** | `/mods timer 25`: đếm ngược trên dải trạng thái, hết giờ thì báo. |
+| 📓 | **Nhật ký** | Ghi số lượt, thời gian, chi phí, file đã sửa vào `~/.claude/mods-journal.md` khi đóng session. |
+
+### 🤖 Dành cho Claude
+
+| | Tính năng | Mô tả |
+| :-: | --- | --- |
+| 🔔 | **Tool `notify_me`** | Claude tự báo bạn khi cần bạn quyết định hoặc khi xong một việc dài. |
+| 🔍 | **Subagent `reviewer`** | Review diff/file tìm bug, lỗ hổng, chỗ phức tạp thừa; chỉ đọc, không sửa. |
+| 🧪 | **Subagent `tester`** | Viết và chạy test nhỏ nhất cho một thay đổi, báo lại bằng chứng. |
+| ⚡ | **Tự chọn model** | *(thử nghiệm)* câu hỏi đơn giản tự chạy bằng Haiku. |
+
+---
+
+## ⌨️ Bảng lệnh `/mods`
+
+<details open>
+<summary><b>📊 Bảng & giao diện</b></summary>
 
 | Lệnh | Tác dụng |
 | --- | --- |
-| `/mods` | Hướng dẫn và trạng thái bật/tắt của từng tính năng |
-| `/mods settings` | Tab cài đặt: bật/tắt nhanh mọi tính năng, chọn theme |
-| `/mods theme <tên>` | Đổi bảng màu |
-| `/mods sel` | Hành động với đoạn đang bôi đen |
-| `/mods find <x>` | Tìm trong hội thoại này |
-| `/mods stats` | Thống kê 7 ngày |
-| `/mods abbrev [;k nội dung]` | Xem / thêm / xóa (bỏ trống nội dung) từ viết tắt |
-| `/mods rule <x>` · `rules` · `unrule <số>` | Luật riêng của dự án |
-| `/mods timer <phút>` | Hẹn giờ (không kèm số: hủy) |
-| `/mods sessions` | Panel các session đang chạy |
-| `/mods dash` | Bảng hoạt động |
-| `/mods prompts` | Prompt nhanh |
-| `/mods save <prompt>` | Lưu một prompt nhanh |
-| `/mods version` | Phiên bản đang dùng và tag mới nhất |
-| `/mods update` | Cập nhật lên tag mới nhất, xong tự chạy `/reload-plugins` |
-| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` `gradient` `powerline` `meters` `statecolor` `fileicons` `anim` `confetti` `splash` `heatmap` `hovercards` `images` |
+| `/mods` | Hướng dẫn và trạng thái từng tính năng |
+| `/mods settings` | ⚙️ Tab cài đặt |
+| `/mods theme <tên>` | 🎨 Đổi bảng màu |
+| `/mods sessions` | 🗂️ Các session đang chạy |
+| `/mods dash` | 📈 Bảng hoạt động |
+| `/mods prompts` · `save <prompt>` | ⚡ Prompt nhanh |
+| `/mods todo [việc]` · `note [ghi chú]` | ☐ TODO · 📌 Ghi chú |
+| `/mods commit` | 📝 Soạn commit message |
+| `/mods context` | 🧠 Phân tích context |
+| `/mods sel` | ✂️ Hành động với đoạn đang bôi đen |
+| `/mods find <từ khóa>` | 🔎 Tìm trong hội thoại |
 
-Mặc định: `sound`, `voice`, `autocompact`, `automodel` và `powerline` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
+</details>
 
-**Mẹo:**
-- Muốn gõ vào ô nhập trong panel (nhắn tin, thêm prompt) thì bấm **ctrl+x tab** để chuyển vào panel, Esc để quay về prompt.
-- Ở chế độ fullscreen, terminal rộng từ **110 cột** trở lên thì panel nằm thành sidebar cạnh hội thoại; hẹp hơn thì panel hiện ngay trên ô prompt. Vị trí panel do Claude Code quyết định, mod không đặt được sang trái hay phải.
+<details open>
+<summary><b>🧰 Công cụ</b></summary>
 
-## Cập nhật và phát hành
+| Lệnh | Tác dụng |
+| --- | --- |
+| `/mods budget <$>` · `budget off` | 💰 Giới hạn chi tiêu theo ngày |
+| `/mods stats` | 💵 Thống kê 7 ngày |
+| `/mods undo [file]` · `checkpoints` | ↩️ Hoàn tác lần sửa file gần nhất |
+| `/mods check "<lệnh>"` · `check run` · `check off` | ✅ Lệnh kiểm tra của dự án |
+| `/mods abbrev [;k nội dung]` | ⌨️ Từ viết tắt |
+| `/mods rule <x>` · `rules` · `unrule <số>` | 📏 Luật của dự án |
+| `/mods standup` | 📣 Báo cáo standup |
+| `/mods handoff <session>` | 🤝 Bàn giao cho session khác |
+| `/mods copy [n]` | 📋 Copy khối code thứ n từ cuối |
+| `/mods timer <phút>` | ⏱ Hẹn giờ (không kèm số: hủy) |
+| `/mods version` · `update` | 🔄 Phiên bản · cập nhật lên tag mới nhất |
+| `/mods <tên tính năng>` | 🔀 Bật/tắt một tính năng (xem bảng dưới) |
 
-Mỗi bản phát hành là một git tag `vX.Y.Z`. `marketplace.json` trên `main` luôn trỏ vào tag mới nhất, nên `/mods update` chỉ cài bản đã được đánh tag, không bao giờ lấy code dở dang trên `main`. Lệnh này chạy lần lượt:
+</details>
 
-1. `claude plugin marketplace update claude-mods`
-2. `claude plugin update terminal-polish@claude-mods`
-3. `/reload-plugins` (tự động)
+---
 
-Phát hành bản mới (dành cho người bảo trì):
+## 🎨 Theme
 
-```bash
-scripts/release.sh 0.2.0
+```text
+/mods theme dracula
 ```
 
-Script kiểm tra working tree sạch, chạy `claude plugin validate` và `claude plugin test`, nâng version trong `plugin.json`, trỏ `marketplace.json` vào tag mới, commit `chore: release v0.2.0`, đánh tag `v0.2.0` rồi push cả nhánh lẫn tag.
+| Theme | Bảng màu | Ghi chú |
+| --- | --- | --- |
+| `auto` | ![](https://img.shields.io/badge/-%20-d97757?style=flat-square) ![](https://img.shields.io/badge/-%20-e0779d?style=flat-square) ![](https://img.shields.io/badge/-%20-b07ae0?style=flat-square) ![](https://img.shields.io/badge/-%20-6c8ee8?style=flat-square) | Theo theme của Claude Code, chạy tốt cả nền sáng lẫn nền tối *(mặc định)* |
+| `catppuccin` | ![](https://img.shields.io/badge/-%20-f5c2e7?style=flat-square) ![](https://img.shields.io/badge/-%20-cba6f7?style=flat-square) ![](https://img.shields.io/badge/-%20-89b4fa?style=flat-square) ![](https://img.shields.io/badge/-%20-94e2d5?style=flat-square) | Catppuccin Mocha |
+| `tokyonight` | ![](https://img.shields.io/badge/-%20-bb9af7?style=flat-square) ![](https://img.shields.io/badge/-%20-7aa2f7?style=flat-square) ![](https://img.shields.io/badge/-%20-7dcfff?style=flat-square) ![](https://img.shields.io/badge/-%20-9ece6a?style=flat-square) | Tokyo Night |
+| `dracula` | ![](https://img.shields.io/badge/-%20-ff79c6?style=flat-square) ![](https://img.shields.io/badge/-%20-bd93f9?style=flat-square) ![](https://img.shields.io/badge/-%20-8be9fd?style=flat-square) ![](https://img.shields.io/badge/-%20-50fa7b?style=flat-square) | Dracula |
+| `nord` | ![](https://img.shields.io/badge/-%20-8fbcbb?style=flat-square) ![](https://img.shields.io/badge/-%20-88c0d0?style=flat-square) ![](https://img.shields.io/badge/-%20-81a1c1?style=flat-square) ![](https://img.shields.io/badge/-%20-b48ead?style=flat-square) | Nord |
+| `gruvbox` | ![](https://img.shields.io/badge/-%20-fb4934?style=flat-square) ![](https://img.shields.io/badge/-%20-fe8019?style=flat-square) ![](https://img.shields.io/badge/-%20-fabd2f?style=flat-square) ![](https://img.shields.io/badge/-%20-b8bb26?style=flat-square) | Gruvbox Dark |
 
-## Phát triển
+> [!NOTE]
+> Các theme có tên được thiết kế cho nền tối. Màu hex cần terminal hỗ trợ truecolor; tmux cần bật `Tc`/`RGB`.
+
+---
+
+## ⚙️ Tab cài đặt
+
+Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một dòng để bật/tắt; có nút **Bật hết** và **Mặc định**. Cũng có thể gõ `/mods <tên>`. Mọi lựa chọn đều được giữ ở các session sau.
+
+| Tên | Mặc định | | Tên | Mặc định |
+| --- | :-: | --- | --- | :-: |
+| `band` dải trạng thái | ✅ | | `secrets` quét secret | ✅ |
+| `cards` khung tin nhắn | ✅ | | `budget` ngân sách | ✅ |
+| `tldr` tóm tắt câu trả lời | ✅ | | `checkpoints` lưu bản cũ | ✅ |
+| `notify` thông báo | ✅ | | `branchlock` khóa nhánh | ⬜ |
+| `sound` âm thanh | ⬜ | | `format` tự format | ⬜ |
+| `voice` đọc to | ⬜ | | `autocheck` tự kiểm tra | ⬜ |
+| `guard` chặn lệnh nguy hiểm | ✅ | | `compactplus` compact thông minh | ✅ |
+| `decor` spinner & gợi ý | ✅ | | `todos` gom TODO | ✅ |
+| `quota` thanh quota | ✅ | | `gradient` chữ chuyển màu | ✅ |
+| `autocompact` tự compact | ⬜ | | `powerline` kiểu powerline | ⬜ |
+| `abbrev` từ viết tắt | ✅ | | `meters` thanh đo | ✅ |
+| `rules` luật dự án | ✅ | | `statecolor` viền theo trạng thái | ✅ |
+| `tools` tool & subagent cho Claude | ✅ | | `fileicons` nhãn loại file | ✅ |
+| `automodel` tự chọn model | ⬜ | | `anim` vệt sáng | ✅ |
+| `journal` nhật ký | ✅ | | `confetti` pháo hoa | ✅ |
+| `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
+| `badges` badge tool | ✅ | | `heatmap` · `images` | ✅ |
+| `notices` thẻ thông báo màu | ✅ | | `hovercards` đổi màu khi rê chuột | ✅ |
+
+---
+
+## 🔄 Cập nhật & phát hành
+
+```text
+/mods version     # bản đang dùng và tag mới nhất
+/mods update      # cập nhật lên tag mới nhất, rồi tự /reload-plugins
+```
+
+Mỗi bản phát hành là một git tag `vX.Y.Z`. `marketplace.json` trên `main` luôn trỏ vào tag mới nhất, nên `/mods update` chỉ cài bản đã được đánh tag. Lệnh này chạy lần lượt `claude plugin marketplace update claude-mods`, `claude plugin update terminal-polish@claude-mods`, rồi `/reload-plugins`.
+
+<details>
+<summary><b>🏷️ Phát hành bản mới (người bảo trì)</b></summary>
+
+```bash
+scripts/release.sh 0.5.0
+```
+
+Script kiểm tra working tree sạch, chạy `claude plugin validate` và `claude plugin test`, nâng version trong `plugin.json`, trỏ `marketplace.json` vào tag mới, commit `chore: release v0.5.0`, đánh tag rồi push cả nhánh lẫn tag.
+
+</details>
+
+---
+
+## 🛠️ Phát triển
 
 ```bash
 claude --plugin-dir .          # chạy Claude Code với mod từ thư mục này (tự nạp lại khi sửa file)
@@ -107,7 +239,7 @@ claude plugin validate .       # kiểm tra manifest, hooks và state
 claude plugin test .           # chạy tests/*.test.ts(x)
 ```
 
-```
+```text
 .claude-plugin/
   plugin.json        manifest của mod
   marketplace.json   catalog, trỏ vào tag mới nhất
@@ -115,19 +247,55 @@ hooks/
   hooks.json         khai báo module
   register.tsx       toàn bộ mod
 types/index.d.ts     kiểu dữ liệu của $.state
-tests/               test cho dải trạng thái, panel, cài đặt, thu gọn output, badge, bộ chặn lệnh, update
+tests/               dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, update
+assets/              banner, ảnh minh họa, logo
 sounds/done.wav      âm báo khi xong
-assets/logo.png      logo ở màn chào
 scripts/release.sh   đánh tag và phát hành
 ```
 
-## Giới hạn
+---
 
-- Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code, không phải API chính thức; một bản cập nhật Claude Code có thể làm panel trống.
-- Mod vẽ **bên trong** giao diện Claude Code. Mod không tạo được cửa sổ riêng, tab hay chia khung kiểu terminal multiplexer, và không chuyển thẳng sang session khác được (dùng nút copy lệnh resume).
-- Bộ chặn lệnh là lớp bảo vệ **best-effort** bằng regex, không phải sandbox: nó bắt những cách viết phổ biến, nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đừng coi nó thay cho chế độ phân quyền của Claude Code.
+## ❓ FAQ
+
+<details>
+<summary><b>Dùng ảnh làm hình nền được không?</b></summary>
+
+Mod không làm được: `Image` chỉ vẽ ảnh vào một ô nằm *đè lên* giao diện, mod không có lớp nào nằm phía sau chữ. Ảnh nền là cài đặt của terminal: kitty (`background_image`), WezTerm (`window_background_image`), Windows Terminal (`backgroundImage`), iTerm2 (Profiles → Window → Background Image), Ghostty (các bản gần đây).
+
+</details>
+
+<details>
+<summary><b>Đặt các bảng sang bên trái được không?</b></summary>
+
+Không. Claude Code tự quyết vị trí: sidebar cạnh hội thoại khi terminal rộng từ 110 cột ở chế độ fullscreen, còn lại thì hiện trên ô prompt.
+
+</details>
+
+<details>
+<summary><b>Dải trạng thái biến mất?</b></summary>
+
+Transcript sẽ có một dòng mờ `terminal-polish: ui.render (AbovePrompt) refused: …` ghi lý do. Thử tắt `/mods anim` rồi `/mods statecolor` để khoanh vùng, hoặc bấm **Mặc định** trong tab cài đặt.
+
+</details>
+
+<details>
+<summary><b>⚠️ Giới hạn đã biết</b></summary>
+
+- Bộ chặn lệnh và quét secret dựa trên mẫu (regex): bắt được các cách viết phổ biến nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đây là lưới an toàn, không thay cho chế độ phân quyền của Claude Code.
+- Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code; một bản cập nhật có thể làm panel trống.
+- `format` chạy prettier **của chính dự án** (`node_modules/.bin/prettier`), tức là code do repo cung cấp; chỉ bật khi bạn tin repo đó.
+- Nút **Commit** không chạy git hooks; muốn chạy hooks thì bấm **Copy lệnh** rồi tự chạy.
 - `/mods stats` có thể thiếu vài lượt khi nhiều session cùng ghi một lúc.
-- Tự chọn model dùng thêm một lần gọi Haiku ở đầu mỗi lượt để phân loại câu hỏi, và có thể phân loại sai. Vì vậy mặc định tắt.
-- Các theme có tên được thiết kế cho nền tối; trên terminal nền sáng thì nên dùng `auto`.
-- Màu hex cần terminal hỗ trợ truecolor (tmux cần bật `Tc`/`RGB`). Hiệu ứng vẽ lại khoảng 12 khung hình/giây chỉ trong lúc chạy; tắt bằng `/mods anim` và `/mods confetti` nếu terminal bị nhấp nháy.
-- TL;DR gọi thêm Haiku nên tốn thêm một ít token. Tắt bằng `/mods tldr`.
+- TL;DR, commit message, bàn giao và tự chọn model gọi thêm Haiku nên tốn thêm một ít token.
+- Hiệu ứng vẽ lại khoảng 12 khung hình/giây, chỉ trong lúc Claude chạy; tắt bằng `/mods anim` và `/mods confetti` nếu terminal bị nhấp nháy.
+- Mod vẽ bên trong giao diện Claude Code: không tạo được cửa sổ riêng, tab hay chia khung kiểu terminal multiplexer.
+
+</details>
+
+---
+
+<div align="center">
+
+Làm bằng 🧡 với <a href="https://claude.com/claude-code">Claude Code</a> · <code>/mods</code> để bắt đầu
+
+</div>

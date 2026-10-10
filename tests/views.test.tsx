@@ -124,3 +124,67 @@ test('the settings tab switches the theme', async ($, on) => {
   expect((await ui.find({ key: 'theme-dracula' }))?.text).toContain('● dracula')
   await ui.unmount()
 })
+
+test('the TODO pane adds an item and ticks it off', async ($, on) => {
+  mock.store(on)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'terminal-polish-todo',
+    props: { title: 'TODO', ...PANE_PROPS },
+  })
+  await ui.input({ key: 'todo-new', text: 'viết test cho budget' })
+  expect((await ui.find({ key: 'todo-toggle-0' }))?.text).toContain('☐ viết test cho budget')
+  await ui.press({ key: 'todo-toggle-0' })
+  expect((await ui.find({ key: 'todo-toggle-0' }))?.text).toContain('☑ viết test cho budget')
+  await ui.unmount()
+})
+
+test('recent tools show short, marked labels and open in full on press', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  on('tool.call', () => ({ deny: 'test bottom' }))
+  on('ui.toast', () => ({ value: undefined }))
+  const command = 'pnpm --filter @shop/api run test:integration --reporter=verbose\nrm -rf build'
+  await $.tool.call({ tool: 'Bash', command })
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'terminal-polish-dash',
+    props: { title: 'Hoạt động', ...PANE_PROPS },
+  })
+  // Short, but never silently cut: … and the hidden line count are on the row.
+  expect(await ui.find({ type: 'Text', text: /Bash {2}pnpm --filter .*… \(\+1 dòng\)/ })).toBeDefined()
+  // Details are drawn only once the row is opened.
+  expect(await ui.find({ type: 'Text', text: /pnpm --filter .* ⏎ rm -rf build/ })).toBeUndefined()
+  const toggle = await ui.find({ type: 'Button', text: /▸/ })
+  expect(toggle).toBeDefined()
+  await ui.press({ key: toggle?.key ?? '' })
+  expect(await ui.find({ type: 'Text', text: /pnpm --filter .* ⏎ rm -rf build/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Bash · lỗi/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('/mods output draws in color: headings, commands, on/off dots', async $ => {
+  const text = [
+    'Cách dùng: /mods <lệnh>',
+    'Bảng:',
+    '  dash      bảng hoạt động',
+    'Bật/tắt (giữ qua các session):',
+    '  band        [bật] dải trạng thái trên ô prompt',
+    '  sound       [tắt] âm thanh khi lượt dài xong',
+  ].join('\n')
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'CommandOutput',
+    props: { command: 'mods', args: '', text, isErrored: false },
+  })
+  expect(await ui.find({ type: 'Text', text: '  ● ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '  ○ ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}dash/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'dải trạng thái trên ô prompt' })).toBeDefined()
+  await ui.unmount()
+})

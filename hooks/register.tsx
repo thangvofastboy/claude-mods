@@ -3,16 +3,22 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type {
   Agent,
+  Breakdown,
   Call,
+  CheckResult,
+  Checkpoint,
+  CommitDraft,
   Diff,
   Found,
   Git,
   LastTurn,
   Limit,
+  Notice,
   Peer,
   Settings,
   SplashInfo,
   TimerState,
+  Todo,
   Turn,
   Usage,
 } from '../types'
@@ -24,6 +30,13 @@ const PROMPTS_PANE = 'terminal-polish-prompts'
 const SETTINGS_PANE = 'terminal-polish-settings'
 const SELECTION_PANE = 'terminal-polish-selection'
 const FIND_PANE = 'terminal-polish-find'
+const TODO_PANE = 'terminal-polish-todo'
+const NOTES_PANE = 'terminal-polish-notes'
+const COMMIT_PANE = 'terminal-polish-commit'
+const CONTEXT_PANE = 'terminal-polish-context'
+// Not `!`: a leading `!` in the composer runs a shell command and never reaches prompt.submit.
+const BYPASS = '>>'
+const MAX_CHECKPOINTS = 50
 const COMPACT_PERCENT = 85
 const COLLAPSE_LINES = 3
 const NOTIFY_TOOL = 'mcp__terminal-polish__notify_me'
@@ -65,6 +78,15 @@ const DEFAULTS: Settings = {
   heatmap: true,
   hovercards: true,
   images: true,
+  secrets: true,
+  budget: true,
+  checkpoints: true,
+  branchlock: false,
+  format: false,
+  autocheck: false,
+  compactplus: true,
+  todos: true,
+  notices: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -93,8 +115,17 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   confetti: 'pháo hoa khi test pass hoặc xong việc dài (chỉ terminal)',
   splash: 'màn chào khi mở session',
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
-  hovercards: 'thẻ chi tiết khi rê chuột (fullscreen)',
+  hovercards: 'đổi màu dòng khi rê chuột (fullscreen)',
   images: 'ảnh logo ở màn chào (kitty/Ghostty)',
+  secrets: 'chặn prompt có API key, token, private key (gửi lại với >> ở đầu để vẫn gửi)',
+  budget: 'giới hạn chi tiêu theo ngày đặt bằng /mods budget',
+  checkpoints: 'lưu bản cũ trước khi Claude sửa file (/mods undo)',
+  branchlock: 'chặn commit/push thẳng lên main, master, production',
+  format: 'tự format file sau khi Claude sửa (prettier, ruff, gofmt, rustfmt)',
+  autocheck: 'tự chạy lệnh kiểm tra (/mods check) sau lượt có sửa file',
+  compactplus: 'giữ file đã sửa, luật và TODO khi /compact',
+  todos: 'gom TODO/FIXME và checklist vào bảng TODO',
+  notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 
@@ -124,11 +155,23 @@ const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
+const notices = atom({ plugin: 'terminal-polish', key: 'notices' } as const, [])
+const openCalls = atom({ plugin: 'terminal-polish', key: 'openCalls' } as const, [])
 const theme = atom({ plugin: 'terminal-polish', key: 'theme' } as const, 'auto')
 const fx = atom({ plugin: 'terminal-polish', key: 'fx' } as const, null)
 const splash = atom({ plugin: 'terminal-polish', key: 'splash' } as const, false)
 const splashInfo = atom({ plugin: 'terminal-polish', key: 'splashInfo' } as const, null)
 const heat = atom({ plugin: 'terminal-polish', key: 'heat' } as const, {})
+const checkpoints = atom({ plugin: 'terminal-polish', key: 'checkpoints' } as const, [])
+const todos = atom({ plugin: 'terminal-polish', key: 'todos' } as const, [])
+const notes = atom({ plugin: 'terminal-polish', key: 'notes' } as const, [])
+const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
+const check = atom({ plugin: 'terminal-polish', key: 'check' } as const, null)
+const checkCommand = atom({ plugin: 'terminal-polish', key: 'checkCommand' } as const, '')
+const breakdown = atom({ plugin: 'terminal-polish', key: 'breakdown' } as const, null)
+const budgetWarned = atom({ plugin: 'terminal-polish', key: 'budgetWarned' } as const, '')
+const spentToday = atom({ plugin: 'terminal-polish', key: 'spentToday' } as const, 0)
+const budgetLimit = atom({ plugin: 'terminal-polish', key: 'budgetLimit' } as const, 0)
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
 const STATE_ROLE = { run: 'warn', ok: 'ok', fail: 'err' } as const
@@ -144,8 +187,16 @@ const SPINNER_WORDS = {
 // Commands no confirmation should wave through. Narrow on purpose: a guard
 // that fires on everyday commands gets switched off within a day.
 const DANGER: readonly [RegExp, string][] = [
-  [/\brm\s+-\w*(rf|fr)\w*\s+(\/|~\/?|\$HOME\/?|\*)(\s|;|&|$)/, 'xóa đệ quy /, ~ hoặc *'],
-  [/\bgit\s+push\b(?=.*\s(--force|-f)(\s|$))(?=.*\b(main|master)\b)/, 'force-push lên main/master'],
+  // rm -rf (or -r -f, --recursive --force) on /, ~, $HOME, with an optional /* and quotes.
+  [
+    /\brm\s+(?:-[a-zA-Z]*(?:rf|fr)[a-zA-Z]*|-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*\s+-[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+["']?(?:(?:\/|~|\$\{?HOME\}?)\/?\*?|\*)["']?(?=\s|;|&|\||$)/,
+    'xóa đệ quy /, ~ hoặc *',
+  ],
+  // --force, -f in any flag cluster (-fu), or a +main refspec; --force-with-lease passes.
+  [
+    /\bgit\b.*\bpush\b(?=.*(?:\s(?:--force(?!-with-lease)|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$)|\s\+(?:refs\/heads\/)?(?:main|master)\b))(?=.*\b(?:main|master)\b)/,
+    'force-push lên main/master',
+  ],
   [/\bmkfs(\.\w+)?\s/, 'format ổ đĩa'],
   [/\bdd\b.*\bof=\/dev\/(sd|nvme|hd|mmcblk)/, 'ghi đè thẳng lên ổ đĩa'],
   [/\bchmod\s+-R\s+777\s+\/(\s|$)/, 'chmod 777 toàn hệ thống'],
@@ -172,7 +223,7 @@ const SAFE_GIT = [
 
 const PROGRAM_KEYS =
   '^(filter\\..+\\.(clean|smudge|process)|diff\\.external|diff\\..+\\.(command|textconv)|merge\\..+\\.driver' +
-  '|gpg(\\..+)?\\.program|sequence\\.editor|uploadpack\\.packobjectshook|credential\\..*helper' +
+  '|gpg(\\..+)?\\.program|gpg\\.ssh\\.defaultkeycommand|sequence\\.editor|uploadpack\\.packobjectshook|credential\\..*helper' +
   '|core\\.(fsmonitor|sshcommand|pager|hookspath|editor|askpass|gitproxy|alternaterefscommand))$'
 
 // Reading config runs no program; `--includes` labels an included file's
@@ -189,6 +240,22 @@ async function gitIsSafe($: EngineInterface, dir?: string) {
 
 // A command is shown whole: every line, joined by ⏎, never cut to its first
 // line or truncated, so a row cannot show a harmless head and hide the rest.
+// The dashboard's compact form: short, but never silently cut. A shortened
+// label always ends in … and says how many more lines the command has, so a
+// harmless head cannot pass for the whole command; ▸ opens it in full.
+const SHORT_LABEL = 40
+function shortLabel(label: string) {
+  const parts = label.split(' ⏎ ')
+  const head = parts[0] ?? ''
+  const more = parts.length - 1
+  if (more === 0 && head.length <= SHORT_LABEL) return label
+  return `${head.length > SHORT_LABEL ? head.slice(0, SHORT_LABEL - 1) : head}…${more ? ` (+${more} dòng)` : ''}`
+}
+
+// Rows a hover card takes at a width: its wrapped lines plus the border.
+const cardHeight = (lines: string[], width: number) =>
+  lines.reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / Math.max(1, width - 4))), 0) + 2
+
 const commandLabel = (command: string) => command.trim().replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
@@ -238,14 +305,14 @@ async function refreshGit($: EngineInterface) {
       await update($, git, () => null)
       return
     }
-    const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+    const [head, status] = await Promise.all([
+      $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 }),
+      $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], { timeoutMs: 3000 }),
+    ])
     if (head.exitCode !== 0) {
       await update($, git, () => null)
       return
     }
-    const status = await $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], {
-      timeoutMs: 3000,
-    })
     const changed = status.stdout.split('\n').filter(Boolean).length
     const value: Git = { branch: head.stdout.trim(), changed }
     await update($, git, () => value)
@@ -480,7 +547,9 @@ async function recordStats($: EngineInterface, name: string, done: LastTurn, usd
     },
   }
   const keep = Object.keys(stats).sort().slice(-STATS_DAYS)
-  await $.store.set('stats', Object.fromEntries(keep.map(k => [k, stats[k]])))
+  const saved: Stats = Object.fromEntries(keep.map(k => [k, stats[k] ?? {}]))
+  await $.store.set('stats', saved)
+  return saved
 }
 
 async function statsText($: EngineInterface) {
@@ -604,7 +673,7 @@ async function armTimer($: EngineInterface, endsAt: number) {
     $.clock.after(Math.max(0, endsAt - now), () => {
       stopTimer()
       void update($, timer, () => null)
-      $.ui.toast('⏰ Hết giờ!')
+      void notice($, '⏰ Hết giờ!')
       void $.ui.notify('Hết giờ!', { title: 'terminal-polish' }).catch(() => undefined)
       void read($, settings).then(s => {
         if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
@@ -630,7 +699,7 @@ async function timerCommand($: EngineInterface, rest: string) {
 async function grabSelection($: EngineInterface) {
   const picked = await $.ui.selection()
   if (!picked?.text.trim()) {
-    $.ui.toast('Chưa bôi đen gì (chỉ có ở chế độ fullscreen)')
+    void notice($, 'Chưa bôi đen gì (chỉ có ở chế độ fullscreen)')
     return false
   }
   await update($, selection, () => picked.text)
@@ -658,8 +727,9 @@ async function writeJournal($: EngineInterface) {
   let before = '# Nhật ký Claude Code (terminal-polish)\n\n'
   try {
     before = await $.fs.read(path)
-  } catch {
-    // First entry.
+  } catch (error) {
+    // Only a missing file starts a new journal; any other failure must not overwrite it.
+    if (await $.fs.exists(path)) throw error
   }
   await $.fs.write(path, `${before}${before.endsWith('\n') ? '' : '\n'}${entry}`)
 }
@@ -899,29 +969,33 @@ let bandSite: string | null = null
 let fxWidth = 0
 let fxTick = 0
 let fxTimer: Timer | null = null
+let partyTimer: Timer | null = null
 const FX_MS = 80
 const PARTY_MS = 2600
 
 function stopFx() {
   fxTimer?.cancel()
   fxTimer = null
+  partyTimer?.cancel()
+  partyTimer = null
 }
 
 async function startFx($: EngineInterface, mode: 'comet' | 'party') {
-  const s = await read($, settings)
+  const [s, P] = await Promise.all([read($, settings), palette($)])
   if ((mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
+  // Stop and start with no await between, so two overlapping calls cannot both
+  // leave a timer running.
   stopFx()
   fxTick = 0
-  await update($, fx, () => mode)
-  const P = await palette($)
   fxTimer = $.clock.every(FX_MS, () => {
     fxTick += 1
     if (!bandSite || fxWidth < 1) return
     void $.ui.blit({ requestId: bandSite, key: 'fx', cells: fxFrame(mode, fxTick, fxWidth, P) }).catch(() => undefined)
   })
   if (mode === 'party') {
-    $.clock.after(PARTY_MS, () => void endFx($, 'party'))
+    partyTimer = $.clock.after(PARTY_MS, () => void endFx($, 'party'))
   }
+  await update($, fx, () => mode)
 }
 
 async function endFx($: EngineInterface, mode: 'comet' | 'party') {
@@ -966,8 +1040,9 @@ const fileTag = (path: string) => FILE_TAGS[path.split('.').pop()?.toLowerCase()
 const HEAT_WEEKS = 8
 const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
 
-async function refreshHeat($: EngineInterface) {
-  const stats = await loadStats($)
+// Both take the stats a caller already holds, so one turn reads the store once.
+async function refreshHeat($: EngineInterface, loaded?: Stats) {
+  const stats = loaded ?? (await loadStats($))
   const value = Object.fromEntries(
     Object.entries(stats).map(([day, rows]) => [day, Object.values(rows).reduce((n, r) => n + r.turns, 0)]),
   )
@@ -1035,6 +1110,483 @@ async function buildSplash($: EngineInterface) {
   await update($, splashInfo, () => info)
 }
 
+// ================================================================ productivity
+// ---- per-project lists kept in $.store under the project root
+async function loadProjectList($: EngineInterface, key: string): Promise<string[]> {
+  const raw = await $.store.get(key)
+  const all = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const list = all[await read($, root)]
+  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : []
+}
+
+async function saveProjectValue($: EngineInterface, key: string, value: unknown) {
+  const raw = await $.store.get(key)
+  const all = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {}
+  all[await read($, root)] = value
+  await $.store.set(key, all)
+}
+
+// ---- budget (38): today's spend from the stats, a daily limit in $.store
+async function refreshSpend($: EngineInterface, loaded?: Stats) {
+  const stats = loaded ?? (await loadStats($))
+  const today = Object.values(stats[localDay(await $.clock.now())] ?? {}).reduce((n, r) => n + r.usd, 0)
+  await update($, spentToday, () => today)
+  const raw = await $.store.get('budget')
+  const limit = typeof raw === 'number' && raw > 0 ? raw : 0
+  await update($, budgetLimit, () => limit)
+}
+
+async function budgetCommand($: EngineInterface, rest: string) {
+  if (rest === 'off' || rest === '0') {
+    await $.store.set('budget', 0)
+    await refreshSpend($)
+    return 'Đã bỏ giới hạn chi tiêu.'
+  }
+  const amount = Number.parseFloat(rest.replace('$', ''))
+  if (rest && amount > 0) {
+    await $.store.set('budget', amount)
+    await refreshSpend($)
+    return `Giới hạn chi tiêu: $${amount.toFixed(2)}/ngày. Hôm nay đã dùng $${(await read($, spentToday)).toFixed(2)}.`
+  }
+  const limit = await read($, budgetLimit)
+  return `Hôm nay: $${(await read($, spentToday)).toFixed(2)}${limit ? ` / $${limit.toFixed(2)}` : ' (chưa đặt giới hạn)'}. Đặt: /mods budget 5 · bỏ: /mods budget off`
+}
+
+// ---- secrets (39): spellings of credentials that should not ride in a prompt
+const SECRET_PATTERNS: readonly [RegExp, string][] = [
+  [/-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/, 'private key'],
+  [/\bAKIA[0-9A-Z]{16}\b/, 'AWS access key'],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/, 'GitHub token'],
+  [/\bsk-ant-[A-Za-z0-9_-]{20,}/, 'Anthropic API key'],
+  [/\bsk-(proj-)?[A-Za-z0-9_-]{32,}/, 'OpenAI API key'],
+  [/\bxox[abposr]-[A-Za-z0-9-]{10,}/, 'Slack token'],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/, 'Google API key'],
+  [/\b(sk|rk)_live_[0-9A-Za-z]{20,}/, 'Stripe live key'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, 'JWT'],
+  // A value with a digit and no `.`/`(`: `password = hunter2x9`, not `password: user.password`.
+  [
+    /\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['"]?(?=[^\s'".()]*\d)[^\s'".()]{8,}/i,
+    'mật khẩu/secret dạng key=value',
+  ],
+]
+const secretIn = (text: string) => SECRET_PATTERNS.find(([re]) => re.test(text))?.[1]
+
+// ---- checkpoints (40): the file as it was, before Claude's Edit or Write
+let checkpointSeq = 0
+
+// Returns the checkpoint's id, so a call that then fails can take it back.
+async function snapshot($: EngineInterface, path: string) {
+  const dir = await read($, home)
+  if (!dir) return undefined
+  const id = Date.now() * 1000 + (checkpointSeq++ % 1000)
+  let copy: string | null = null
+  if (await $.fs.exists(path)) {
+    copy = `${dir}/.claude/mods-checkpoints/${await $.session.id()}/${id}-${baseName(path)}`
+    await $.fs.write(copy, await $.fs.read(path))
+  }
+  const point: Checkpoint = { id, path, copy, at: await $.clock.now() }
+  await update($, checkpoints, list => [...list, point].slice(-MAX_CHECKPOINTS))
+  return id
+}
+
+async function undoCommand($: EngineInterface, rest: string) {
+  const list = await read($, checkpoints)
+  const wanted = rest ? list.filter(c => c.path.endsWith(rest)) : list
+  const point = wanted[wanted.length - 1]
+  if (!point) return rest ? `Không có checkpoint nào cho "${rest}".` : 'Chưa có checkpoint nào trong session này.'
+  if (point.copy) {
+    await $.fs.write(point.path, await $.fs.read(point.copy))
+  } else {
+    const run = await $.process.run(['rm', '--', point.path], { timeoutMs: 5000 })
+    if (run.exitCode !== 0) return `✗ Không xóa được file mới ${point.path}: ${run.stderr.trim()}`
+  }
+  await update($, checkpoints, l => l.filter(c => c.id !== point.id))
+  return point.copy
+    ? `↩ Đã khôi phục ${point.path} về trước lần sửa lúc ${new Date(point.at).toLocaleTimeString()}.`
+    : `↩ Đã xóa ${point.path} (file do Claude tạo mới).`
+}
+
+const checkpointsText = (list: Checkpoint[]) =>
+  list.length
+    ? [
+        'Checkpoint (mới nhất cuối):',
+        ...list.slice(-15).map(c => `  ${new Date(c.at).toLocaleTimeString()}  ${c.copy ? 'sửa' : 'mới'}  ${c.path}`),
+        'Hoàn tác: /mods undo [đuôi tên file]',
+      ].join('\n')
+    : 'Chưa có checkpoint nào trong session này.'
+
+// ---- branch lock (41)
+const PROTECTED_BRANCHES = ['main', 'master', 'production']
+
+// `git [global options] <sub>`: -C dir, -c k=v and --flags may sit before it.
+const gitSub = (sub: string) => new RegExp(`\\bgit(?:\\s+-[cC]\\s+\\S+|\\s+--?[\\w-]+(?:=\\S+)?)*\\s+${sub}\\b`)
+const GIT_COMMIT = gitSub('commit')
+const GIT_PUSH = gitSub('push')
+
+function branchLockReason(command: string, branch: string | undefined) {
+  const onProtected = !!branch && PROTECTED_BRANCHES.includes(branch)
+  if (GIT_COMMIT.test(command) && onProtected) return `commit thẳng lên ${branch}`
+  if (GIT_PUSH.test(command)) {
+    const named = PROTECTED_BRANCHES.find(b =>
+      new RegExp(`(?:\\s|:|\\+|refs/heads/)${b}(?=\\s|;|&|\\||$)`).test(command),
+    )
+    if (named) return `push thẳng lên ${named}`
+    // A push naming no refspec after the remote pushes the current branch.
+    const args = command
+      .replace(/^[\s\S]*?\bpush\b/, '')
+      .split(/[;&|]/)[0]
+      ?.trim()
+      .split(/\s+/)
+      .filter(a => a && !a.startsWith('-'))
+    if (onProtected && (args?.length ?? 0) <= 1) return `push từ nhánh ${branch}`
+  }
+  return undefined
+}
+
+// ---- auto-format (42): the project's own formatter, only where it exists
+async function formatFile($: EngineInterface, path: string) {
+  const base = await read($, root)
+  if (!base || !path.startsWith(`${base}/`)) return
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  const prettier = `${base}/node_modules/.bin/prettier`
+  const plans: string[][] = []
+  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'css', 'scss', 'md', 'html', 'yml', 'yaml'].includes(ext)) {
+    if (await $.fs.exists(prettier)) plans.push([prettier, '--write', '--log-level', 'warn', path])
+  } else if (ext === 'py') {
+    plans.push(['ruff', 'format', path], ['black', '-q', path])
+  } else if (ext === 'go') {
+    plans.push(['gofmt', '-w', path])
+  } else if (ext === 'rs') {
+    plans.push(['rustfmt', path])
+  }
+  for (const argv of plans) {
+    try {
+      const run = await $.process.run(argv, { cwd: base, timeoutMs: 20000 })
+      if (run.exitCode === 0) return
+    } catch {
+      // Not installed: try the next formatter.
+    }
+  }
+}
+
+// ---- auto-check (43): one command per project, run after a turn that edited files
+async function runCheck($: EngineInterface) {
+  const command = await read($, checkCommand)
+  if (!command) return
+  const base = (await read($, root)) || undefined
+  void notice($, `⏳ Đang kiểm tra: ${command}`)
+  try {
+    const run = await $.process.run(['sh', '-c', command], { cwd: base, timeoutMs: 180000 })
+    const value: CheckResult = {
+      ok: run.exitCode === 0,
+      command,
+      output: `${run.stdout}${run.stderr}`.trim().split('\n').slice(-12).join('\n'),
+      at: await $.clock.now(),
+    }
+    await update($, check, () => value)
+    void notice($, value.ok ? `✓ Kiểm tra pass: ${command}` : `✗ Kiểm tra lỗi: ${command}`)
+    if (value.ok) void startFx($, 'party')
+  } catch (error) {
+    const value: CheckResult = {
+      ok: false,
+      command,
+      output: error instanceof Error ? error.message : String(error),
+      at: await $.clock.now(),
+    }
+    await update($, check, () => value)
+  }
+}
+
+async function checkCommandText($: EngineInterface, rest: string) {
+  if (rest === 'off') {
+    await update($, checkCommand, () => '')
+    await saveProjectValue($, 'checks', '')
+    return 'Đã bỏ lệnh kiểm tra của dự án này.'
+  }
+  if (rest === 'run' || (!rest && (await read($, checkCommand)))) {
+    await runCheck($)
+    const r = await read($, check)
+    return r ? `${r.ok ? '✓ pass' : '✗ lỗi'}: ${r.command}\n${r.output}` : 'Chưa đặt lệnh kiểm tra.'
+  }
+  if (!rest) return 'Đặt lệnh kiểm tra cho dự án: /mods check "pnpm test" · chạy: /mods check run · bỏ: /mods check off'
+  const command = rest.replace(/^["']|["']$/g, '')
+  await update($, checkCommand, () => command)
+  await saveProjectValue($, 'checks', command)
+  return `Lệnh kiểm tra của dự án: ${command}${(await read($, settings)).autocheck ? '' : '\n(Bật tự chạy sau mỗi lượt: /mods autocheck)'}`
+}
+
+// ---- commit (44): Haiku drafts a message from the staged diff
+async function draftCommit($: EngineInterface) {
+  const base = await read($, root)
+  if (!(await gitIsSafe($, base))) {
+    await update($, commitDraft, () => ({
+      message: '',
+      files: 0,
+      note: 'Bỏ qua: config của repo này khai báo chương trình git sẽ chạy.',
+    }))
+    return
+  }
+  const staged = await $.process.run(
+    [...SAFE_GIT, '-C', base, 'diff', '--cached', '--no-ext-diff', '--no-textconv', '--stat'],
+    {
+      timeoutMs: 5000,
+    },
+  )
+  const count = staged.stdout.split('\n').filter(l => l.includes('|')).length
+  if (count === 0) {
+    await update($, commitDraft, () => ({
+      message: '',
+      files: 0,
+      note: 'Chưa có gì được stage. Bấm "Stage tất cả" hoặc tự git add.',
+    }))
+    return
+  }
+  const patch = await $.process.run(
+    [...SAFE_GIT, '-C', base, 'diff', '--cached', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all'],
+    { timeoutMs: 10000 },
+  )
+  const reply = await $.model.complete({
+    model: 'haiku',
+    maxTokens: 300,
+    timeoutMs: 20000,
+    system:
+      'Write one git commit message for this staged diff in Conventional Commits form: a subject line under 72 characters (type: summary), then optionally a blank line and a short body saying why. Output only the message.',
+    prompt: `${staged.stdout}\n\n${patch.stdout.slice(0, 12000)}`,
+  })
+  const message = reply.isAnswered
+    ? reply.text
+        .trim()
+        .replace(/^```\w*\n?|```$/g, '')
+        .trim()
+    : ''
+  await update($, commitDraft, () => ({
+    message,
+    files: count,
+    note: reply.isAnswered ? '' : 'Haiku không trả lời; gõ message vào ô bên dưới.',
+  }))
+}
+
+// git add -A, then unstage what the guard protects (.env, keys): staging
+// everything must not quietly put a secret into the next commit.
+async function stageAll($: EngineInterface, base: string) {
+  await $.process.run([...SAFE_GIT, '-C', base, 'add', '-A'], { timeoutMs: 10000 })
+  const staged = await $.process.run([...SAFE_GIT, '-C', base, 'diff', '--cached', '--name-only'], { timeoutMs: 5000 })
+  const secret = staged.stdout.split('\n').filter(f => f && isSecretFile(f))
+  if (secret.length) {
+    await $.process.run([...SAFE_GIT, '-C', base, 'reset', '-q', '--', ...secret], { timeoutMs: 5000 })
+    void notice($, `🔐 Đã bỏ stage: ${secret.join(', ')}`)
+  }
+}
+
+async function commitNow($: EngineInterface) {
+  const draft = await read($, commitDraft)
+  if (!draft?.message) return
+  const base = await read($, root)
+  if (!(await gitIsSafe($, base))) return
+  const run = await $.process.run([...SAFE_GIT, '-C', base, 'commit', '-m', draft.message], { timeoutMs: 30000 })
+  void notice(
+    $,
+    run.exitCode === 0
+      ? `✓ Đã commit: ${draft.message.split('\n')[0]}`
+      : `✗ Commit lỗi: ${run.stderr.trim().slice(0, 200)}`,
+  )
+  if (run.exitCode === 0) await update($, commitDraft, () => null)
+  await refreshGit($)
+}
+
+// ---- compact (45): what a summary must keep
+async function compactNotes($: EngineInterface) {
+  const touched = await read($, files)
+  const list = await read($, rules)
+  const open = (await read($, todos)).filter(t => !t.done)
+  return [
+    'When summarizing, keep these explicitly:',
+    touched.length ? `- Files edited this session: ${touched.join(', ')}` : '',
+    list.length ? `- Project rules the user set: ${list.join(' | ')}` : '',
+    open.length ? `- Open TODOs: ${open.map(t => t.text).join(' | ')}` : '',
+    '- Decisions made and why, and the exact next step that was in progress.',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+// ---- todos (46): TODO/FIXME lines written into code, and "- [ ]" items in answers
+function todosIn(text: string, file?: string): Todo[] {
+  const found: Todo[] = []
+  for (const line of text.split('\n')) {
+    // TODO/FIXME only from code written to a file; an answer only gives "- [ ]" items.
+    const code = file ? line.match(/\b(?:TODO|FIXME)\b[:\s-]*(.{3,160})/) : null
+    const box = line.match(/^\s*[-*] \[ \] (.{3,160})/)
+    const text = (code?.[1] ?? box?.[1])?.replace(/\s*(\*\/|-->)\s*$/, '').trim()
+    if (text) found.push({ text, done: false, ...(code && file ? { file } : {}) })
+  }
+  return found.slice(0, 10)
+}
+
+async function addTodos($: EngineInterface, items: Todo[]) {
+  if (items.length === 0) return
+  const list = await update($, todos, l => {
+    const seen = new Set(l.map(t => t.text))
+    return [...l, ...items.filter(t => !seen.has(t.text))].slice(-100)
+  })
+  await saveProjectValue($, 'todos', list)
+}
+
+async function setTodos($: EngineInterface, change: (l: Todo[]) => Todo[]) {
+  const list = await update($, todos, change)
+  await saveProjectValue($, 'todos', list)
+}
+
+async function setNotes($: EngineInterface, change: (l: string[]) => string[]) {
+  const list = await update($, notes, change)
+  await saveProjectValue($, 'notes', list)
+}
+
+// ---- standup (48): yesterday and today from the stats and the journal
+async function standupText($: EngineInterface) {
+  const stats = await loadStats($)
+  const now = await $.clock.now()
+  const today = localDay(now)
+  const yesterday = Object.keys(stats)
+    .filter(d => d < today)
+    .sort()
+    .pop()
+  const day = (d: string | undefined) =>
+    d
+      ? Object.entries(stats[d] ?? {}).map(
+          ([name, r]) => `  • ${name}: ${r.turns} lượt, ${duration(r.seconds * 1000)}, $${r.usd.toFixed(2)}`,
+        )
+      : []
+  let edited: string[] = []
+  try {
+    const journal = await $.fs.read(`${await read($, home)}/.claude/mods-journal.md`)
+    edited = journal
+      .split('\n## ')
+      .filter(entry => (yesterday && entry.startsWith(yesterday)) || entry.startsWith(today))
+      .flatMap(entry => entry.split('\n').filter(l => l.startsWith('- File đã sửa:')))
+      .map(l => l.replace('- File đã sửa: ', ''))
+      .filter(l => l !== 'không có')
+  } catch {
+    // No journal yet.
+  }
+  const open = (await read($, todos)).filter(t => !t.done)
+  return [
+    `Standup ${today}`,
+    `Hôm qua${yesterday ? ` (${yesterday})` : ''}:`,
+    ...(day(yesterday).length ? day(yesterday) : ['  • (không có số liệu)']),
+    'Hôm nay:',
+    ...(day(today).length ? day(today) : ['  • (chưa có)']),
+    ...(edited.length
+      ? ['File đã động tới:', `  • ${[...new Set(edited.join(', ').split(', '))].slice(0, 15).join(', ')}`]
+      : []),
+    ...(open.length ? ['Đang mở:', ...open.slice(0, 8).map(t => `  • ${t.text}`)] : []),
+  ].join('\n')
+}
+
+// ---- handoff (49): a summary of this session sent to another one
+async function handoffCommand($: EngineInterface, rest: string) {
+  if (!rest) return 'Cách dùng: /mods handoff <tên hoặc id session> (xem /mods sessions)'
+  const target = (await read($, peers)).find(
+    p => !p.isSelf && (p.name === rest || p.id.startsWith(rest) || p.name.startsWith(rest)),
+  )
+  if (!target) return `Không thấy session "${rest}". Xem danh sách: /mods sessions`
+  const transcript = (await $.session.messages())
+    .slice(-30)
+    .map(m => `${m.role === 'user' ? 'USER' : 'CLAUDE'}: ${m.text.slice(0, 600)}`)
+    .join('\n\n')
+    .slice(-15000)
+  const reply = await $.model.complete({
+    model: 'haiku',
+    maxTokens: 500,
+    timeoutMs: 30000,
+    system:
+      'Write a handoff note for another Claude session taking over this work: the goal, what is done, what is in progress, the next concrete steps, and files involved. Bullets, at most 12 lines, in the language the user wrote in.',
+    prompt: `${transcript}\n\nFiles edited: ${(await read($, files)).join(', ') || 'none'}`,
+  })
+  if (!reply.isAnswered) return `✗ Không tóm tắt được (${reply.reason}).`
+  const from = (await read($, project)) || 'một session khác'
+  const sent = await $.session.send({
+    to: { sessionId: target.id },
+    text: `Bàn giao từ ${from}:\n${reply.text.trim()}`,
+  })
+  return sent.isDelivered
+    ? `✓ Đã bàn giao cho ${target.name}:\n${reply.text.trim()}`
+    : `✗ Không gửi được tới ${target.name}: ${sent.reason}`
+}
+
+// ---- copy (50): the nth latest code block in Claude's answers
+async function copyCommand($: EngineInterface, rest: string) {
+  const nth = Math.max(1, Number.parseInt(rest, 10) || 1)
+  const blocks = (await $.session.messages())
+    .filter(m => m.role === 'assistant')
+    .flatMap(m => [...m.text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map(x => x[1] ?? ''))
+  const block = blocks[blocks.length - nth]
+  if (block === undefined) return blocks.length ? `Chỉ có ${blocks.length} khối code.` : 'Chưa có khối code nào.'
+  const copied = await $.ui.copy({ text: block.replace(/\n$/, '') })
+  const lines = block.split('\n').length - 1
+  return copied.isCopied
+    ? `📋 Đã copy khối code thứ ${nth} từ cuối (${lines} dòng).`
+    : `✗ Không copy được (${copied.reason}).`
+}
+
+// ---- context (51)
+async function refreshBreakdown($: EngineInterface) {
+  const u = await $.session.usage({ breakdown: 'summary' })
+  const b = u.context.breakdown
+  if (!b) {
+    await update($, breakdown, () => null)
+    return
+  }
+  const value: Breakdown = {
+    categories: b.categories
+      .filter(c => c.tokens > 0 && !c.isDeferred)
+      .map(c => ({ name: c.name, tokens: c.tokens, color: c.color })),
+    total: b.totalTokens,
+    max: b.maxTokens,
+  }
+  await update($, breakdown, () => value)
+}
+
+const openTodo = ($: EngineInterface) => $.ui.open({ id: TODO_PANE, title: 'TODO' })
+const openNotes = ($: EngineInterface) => $.ui.open({ id: NOTES_PANE, title: 'Ghi chú' })
+const openCommit = ($: EngineInterface) => $.ui.open({ id: COMMIT_PANE, title: 'Commit' })
+const openContext = ($: EngineInterface) => $.ui.open({ id: CONTEXT_PANE, title: 'Context' })
+
+// ---- notices: the engine's toast (text only) with an icon, and a colored,
+// bordered card on the band for a few seconds.
+const NOTICE_MS = 6000
+const NOTICE_KINDS: readonly [RegExp, string, Notice['kind']][] = [
+  [/^(✓|✅|🎉)/u, '', 'ok'],
+  [/^(✗|❌)/u, '', 'err'],
+  [/^(🛡|🔐|⚠)/u, '', 'warn'],
+  [/^(💰)/u, '', 'pink'],
+  [/^(⏰|⏱|⏳)/u, '', 'warn'],
+  [/^(🔔|💡|📋|📨|↩)/u, '', 'info'],
+]
+let noticeSeq = 0
+
+async function notice($: EngineInterface, raw: string) {
+  const matched = NOTICE_KINDS.find(([re]) => re.test(raw))
+  const text = matched ? raw : /^Context/.test(raw) ? `🧠 ${raw}` : `💬 ${raw}`
+  const kind: Notice['kind'] = matched?.[2] ?? (/^Context/.test(raw) ? 'warn' : 'info')
+  $.ui.toast(text, { timeoutMs: NOTICE_MS })
+  if (!(await read($, settings)).notices) return
+  const [icon = '💬', ...rest] = [...text]
+  const item: Notice = { id: ++noticeSeq, icon, kind, text: rest.join('').trim() }
+  await update($, notices, l => [...l, item].slice(-3))
+  $.clock.after(NOTICE_MS, () => void update($, notices, l => l.filter(n => n.id !== item.id)))
+}
+
+// The guard's verdict on one shell command (Bash or Monitor). The branch is
+// read now, not from the band's state: a checkout earlier in the same turn counts.
+async function shellReason($: EngineInterface, command: string) {
+  const s = await read($, settings)
+  const danger = s.guard ? dangerOf(command) : undefined
+  if (danger || !s.branchlock || !/\bgit\b/.test(command)) return danger
+  const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+  return branchLockReason(command, head.exitCode === 0 ? head.stdout.trim() : (await read($, git))?.branch)
+}
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -1052,6 +1604,15 @@ async function helpText($: EngineInterface) {
     '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
     '  find <x>  tìm x trong hội thoại này',
     'Công cụ:',
+    '  budget <$>|off     giới hạn chi tiêu theo ngày',
+    '  undo [file] · checkpoints   hoàn tác lần sửa file gần nhất của Claude',
+    '  check "<lệnh>"|run|off      lệnh kiểm tra của dự án',
+    '  commit             Haiku soạn commit message từ phần đã stage',
+    '  todo [x] · note [x]         bảng TODO và ghi chú của dự án',
+    '  standup            tóm tắt hôm qua/hôm nay, copy sẵn',
+    '  handoff <session>  bàn giao việc đang làm cho session khác',
+    '  copy [n]           copy khối code thứ n từ cuối',
+    '  context            context đang dùng cho những gì',
     '  stats              chi phí, số lượt, thời gian 7 ngày gần nhất',
     '  abbrev [;k nội dung]  xem / thêm / xóa (bỏ nội dung) từ viết tắt',
     '  rule <x> · rules · unrule <số>  luật riêng của dự án này',
@@ -1075,10 +1636,10 @@ export const register: Register = on => {
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | theme <x> | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
+          'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
       })
     } catch {
-      $.ui.toast('terminal-polish: không đăng ký được /mods')
+      void notice($, 'terminal-polish: không đăng ký được /mods')
     }
     try {
       await loadSettings($)
@@ -1095,6 +1656,16 @@ export const register: Register = on => {
       const all = await loadRules($)
       const list = Array.isArray(all[rootPath]) ? all[rootPath] : []
       await update($, rules, () => list)
+      const savedTodos = await $.store.get('todos')
+      const todoList =
+        savedTodos && typeof savedTodos === 'object' ? (savedTodos as Record<string, unknown>)[rootPath] : null
+      await update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : []))
+      const savedNotes = await loadProjectList($, 'notes')
+      await update($, notes, () => savedNotes)
+      const savedChecks = await $.store.get('checks')
+      const command =
+        savedChecks && typeof savedChecks === 'object' ? (savedChecks as Record<string, unknown>)[rootPath] : ''
+      await update($, checkCommand, () => (typeof command === 'string' ? command : ''))
     } catch {
       // The band falls back to its own label.
     }
@@ -1110,6 +1681,10 @@ export const register: Register = on => {
       await update($, lastUsd, () => use?.usd ?? null)
       const t = await read($, timer)
       if (t && t.endsAt > now) await armTimer($, t.endsAt)
+      else if (t) {
+        await update($, timer, () => null)
+        await notice($, '⏰ Hết giờ! (trong lúc nạp lại)')
+      }
     } catch {
       // Stats and the timer start fresh.
     }
@@ -1146,6 +1721,7 @@ export const register: Register = on => {
       const homeDir = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
       await update($, home, () => homeDir)
       await refreshHeat($)
+      await refreshSpend($)
       await buildSplash($)
       const selfId = await $.session.id()
       const dir = `${homeDir}/.claude/sessions`
@@ -1161,9 +1737,16 @@ export const register: Register = on => {
     return ran
   })
 
+  // What only the person may do from /mods: switch features, run or set the check
+  // command, undo, commit, lift the budget. Another plugin's $.command.run cannot.
+  const PERSON_ONLY = new Set(['check', 'undo', 'commit', 'budget', 'theme', ...Object.keys(DEFAULTS)])
+
   on('command.run', { command: 'mods' }, async ($, e) => {
     const args = e.args.trim()
     const word = args.split(/\s+/)[0] ?? ''
+    if (PERSON_ONLY.has(word) && e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
+      return { text: `/mods ${word} chỉ chạy được khi bạn tự gõ.` }
+    }
     switch (word) {
       case 'sessions':
         return placed(await openPeers($), 'Đã mở danh sách session.')
@@ -1173,6 +1756,40 @@ export const register: Register = on => {
         return placed(await openPrompts($), 'Đã mở prompt nhanh.')
       case 'settings':
         return placed(await openSettings($), 'Đã mở tab cài đặt.')
+      case 'budget':
+        return { text: await budgetCommand($, args.slice(word.length).trim()) }
+      case 'undo':
+        return { text: await undoCommand($, args.slice(word.length).trim()) }
+      case 'checkpoints':
+        return { text: checkpointsText(await read($, checkpoints)) }
+      case 'check':
+        return { text: await checkCommandText($, args.slice(word.length).trim()) }
+      case 'commit':
+        await draftCommit($)
+        return placed(await openCommit($), 'Đã soạn commit message.')
+      case 'todo': {
+        const text = args.slice(word.length).trim()
+        if (text) await addTodos($, [{ text, done: false }])
+        return placed(await openTodo($), text ? `Đã thêm TODO: ${text}` : 'Đã mở bảng TODO.')
+      }
+      case 'notes':
+      case 'note': {
+        const text = args.slice(word.length).trim()
+        if (text) await setNotes($, l => [...l, text].slice(-50))
+        return placed(await openNotes($), text ? `Đã ghi: ${text}` : 'Đã mở ghi chú.')
+      }
+      case 'standup': {
+        const text = await standupText($)
+        const copied = await $.ui.copy({ text })
+        return { text: `${text}${copied.isCopied ? '\n📋 Đã copy.' : ''}` }
+      }
+      case 'handoff':
+        return { text: await handoffCommand($, args.slice(word.length).trim()) }
+      case 'copy':
+        return { text: await copyCommand($, args.slice(word.length).trim()) }
+      case 'context':
+        await refreshBreakdown($)
+        return placed(await openContext($), 'Đã mở phân tích context.')
       case 'theme': {
         const name = args.slice(word.length).trim().toLowerCase()
         if (!(name in THEMES)) {
@@ -1226,7 +1843,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
-    const value: Turn = { tools: 0, failed: 0 }
+    const value: Turn = { tools: 0, failed: 0, edits: 0 }
     await update($, turn, () => value)
     await update($, autoModel, () => null)
     await update($, splash, () => false)
@@ -1253,10 +1870,50 @@ export const register: Register = on => {
   })
 
   // Abbreviations (15): expand `;key` before the prompt is sent.
+  // Before a typed prompt leaves: secrets (39), budget (38), abbreviations (15).
+  // A prompt starting with >> goes through both checks, the >> removed.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer' || !(await read($, settings)).abbrev) return next(e)
-    const text = expandAbbrevs(e.text, await loadAbbrevs($))
+    const s = await read($, settings)
+    const kind = e.origin.kind
+    const isTyped = kind === 'composer' || kind === 'bridge'
+    const isForced = isTyped && e.text.startsWith(BYPASS)
+    let text = isForced ? e.text.slice(BYPASS.length).trimStart() : e.text
+    if (!isForced && isTyped && s.secrets) {
+      const found = secretIn(text)
+      if (found) {
+        return {
+          drop: `🔐 Prompt có vẻ chứa ${found}, chưa gửi. Xóa nó đi, hoặc gửi lại với "${BYPASS}" ở đầu nếu chắc chắn.`,
+        }
+      }
+    }
+    // Every prompt that starts a turn spends: /loop, panes and remote ones too,
+    // a background task's notification excepted. Today's spend is re-read here,
+    // so a limit hit yesterday does not hold this morning's prompts.
+    if (!isForced && s.budget && kind !== 'task-notification') {
+      await refreshSpend($)
+      const [limit, spent] = await Promise.all([read($, budgetLimit), read($, spentToday)])
+      if (limit > 0 && spent >= limit) {
+        return {
+          drop: `💰 Đã dùng $${spent.toFixed(2)} / $${limit.toFixed(2)} hôm nay. Gửi lại với "${BYPASS}" ở đầu để vẫn gửi, hoặc /mods budget off.`,
+        }
+      }
+    }
+    if (s.abbrev && kind === 'composer') text = expandAbbrevs(text, await loadAbbrevs($))
     return next(text === e.text ? e : { ...e, text })
+  }).catch(($, e, next) => {
+    // A fault holds a typed prompt back (>> still sends it) rather than skip the checks.
+    if (next.called) return next(e)
+    const isTyped = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    if (!isTyped) return next(e)
+    if (e.text.startsWith(BYPASS)) return next({ ...e, text: e.text.slice(BYPASS.length).trimStart() })
+    return { drop: `terminal-polish: không kiểm tra được prompt nên đã giữ lại. Gửi lại với "${BYPASS}" ở đầu để gửi.` }
+  })
+
+  // Compact (45): tell the summary what it must keep.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId || !(await read($, settings)).compactplus) return next(e)
+    const extra = await compactNotes($)
+    return next({ ...e, instructions: [e.instructions, extra].filter(Boolean).join('\n\n') })
   })
 
   // Project rules (17): appended to the system prompt, last.
@@ -1286,13 +1943,15 @@ export const register: Register = on => {
     }
     const raw = (e as unknown as { message?: unknown }).message
     const message = (typeof raw === 'string' ? raw : '').trim().slice(0, 300) || 'Claude cần bạn.'
-    $.ui.toast(`🔔 ${message}`)
+    void notice($, `🔔 ${message}`)
     const title = (await read($, project)) || 'Claude'
     const sent = await $.ui.notify(message, { title }).catch(() => undefined)
-    const delivered = sent?.isSent === true
+    // An MCP tool's result is its content: a string (or content blocks), never an object.
     return {
-      result: { delivered },
-      text: delivered ? 'Notified the user.' : 'Shown in the session as a toast; no desktop notification channel.',
+      result:
+        sent?.isSent === true
+          ? 'Notified the user.'
+          : 'Shown in the session as a toast; no desktop notification channel.',
     }
   })
 
@@ -1301,6 +1960,16 @@ export const register: Register = on => {
       if ((await read($, settings)).journal) await writeJournal($)
     } catch {
       // Exits stay fast; a lost entry is the cost.
+    }
+    try {
+      // Checkpoints live only as long as the session that can undo them.
+      const dir = await read($, home)
+      const id = await $.session.id()
+      if (dir && /^[\w-]+$/.test(id)) {
+        await $.process.run(['rm', '-rf', '--', `${dir}/.claude/mods-checkpoints/${id}`], { timeoutMs: 3000 })
+      }
+    } catch {
+      // Left for the next cleanup.
     }
     return next(e)
   })
@@ -1312,21 +1981,30 @@ export const register: Register = on => {
   const guardFailed = { deny: 'terminal-polish: bộ chặn lỗi, đã chặn cho an toàn.' }
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const reason = (await read($, settings)).guard ? dangerOf(e.command) : undefined
+    const reason = await shellReason($, e.command)
     if (!reason) return next(e)
-    $.ui.toast(`🛡 Đã chặn: ${reason}`)
+    await notice($, `🛡 Đã chặn: ${reason}`)
+    return guard(reason)
+  }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
+
+  // Monitor runs a shell command too: the same rules, or it is a way around them.
+  on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
+    const raw = (e as unknown as { command?: unknown }).command
+    const reason = await shellReason($, typeof raw === 'string' ? raw : '')
+    if (!reason) return next(e)
+    await notice($, `🛡 Đã chặn: ${reason}`)
     return guard(reason)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    $.ui.toast(`🛡 Đã chặn sửa ${baseName(e.file_path)}`)
+    void notice($, `🛡 Đã chặn sửa ${baseName(e.file_path)}`)
     return guard(`sửa file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    $.ui.toast(`🛡 Đã chặn ghi ${baseName(e.file_path)}`)
+    void notice($, `🛡 Đã chặn ghi ${baseName(e.file_path)}`)
     return guard(`ghi file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
@@ -1337,10 +2015,12 @@ export const register: Register = on => {
     const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
     const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
     let began = 0
+    let pointId: number | undefined
     try {
       began = await $.clock.now()
       await update($, calls, list => [...list, call].slice(-100))
       await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
+      if (path && e.tool !== 'Read' && (await read($, settings)).checkpoints) pointId = await snapshot($, path)
     } catch {
       // The row is only display.
     }
@@ -1350,8 +2030,10 @@ export const register: Register = on => {
     try {
       const elapsed = began ? (await $.clock.now()) - began : undefined
       const isFailed = ran.deny !== undefined || ran.isError === true
+      // A denied or failed edit changed nothing: its checkpoint would undo nothing.
+      if (isFailed && pointId !== undefined) await update($, checkpoints, l => l.filter(c => c.id !== pointId))
       if (!isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
-        $.ui.toast('🎉 Test pass!')
+        void notice($, '🎉 Test pass!')
         void startFx($, 'party')
       }
       await update($, calls, list =>
@@ -1364,6 +2046,13 @@ export const register: Register = on => {
       }
       if (!isFailed && path && e.tool !== 'Read') {
         await update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30))
+        await update($, turn, t => (t ? { ...t, edits: t.edits + 1 } : t))
+        const s = await read($, settings)
+        if (s.format) await formatFile($, path)
+        if (s.todos) {
+          const written = e.tool === 'Edit' ? e.new_string : e.tool === 'Write' ? e.content : ''
+          await addTodos($, todosIn(written, path))
+        }
       }
     } catch {
       // The row is only display.
@@ -1378,6 +2067,12 @@ export const register: Register = on => {
     const s = await read($, settings)
     const t = await read($, turn)
     const done: LastTurn = { seconds: Math.round(e.durationMs / 1000), tools: t?.tools ?? 0, failed: t?.failed ?? 0 }
+    try {
+      if (s.todos && e.reason === 'answer') await addTodos($, todosIn(e.answer))
+      if (s.autocheck && (t?.edits ?? 0) > 0) void runCheck($)
+    } catch {
+      // Extras never hold the turn up.
+    }
     await update($, last, () => done)
     await update($, history, list => [...list, done].slice(-20))
     await update($, turn, () => null)
@@ -1391,22 +2086,31 @@ export const register: Register = on => {
     }))
 
     const summary = `Xong sau ${duration(e.durationMs)} · ${done.tools} tool${done.failed ? ` · ${done.failed} lỗi` : ''}`
-    if (done.seconds >= TOAST_SECONDS) $.ui.toast(`✓ ${summary}`)
+    if (done.seconds >= TOAST_SECONDS) void notice($, `✓ ${summary}`)
     if (done.seconds >= NOTIFY_SECONDS && !e.isAborted) {
       const title = (await read($, project)) || 'Claude'
       if (s.notify) void $.ui.notify(summary, { title }).catch(() => undefined)
       if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
       if (s.voice) void $.audio.speak('Claude đã xong').catch(() => undefined)
     }
-    await refreshGit($)
-    await refreshUsage($)
+    await Promise.all([refreshGit($), refreshUsage($)])
     try {
       const use = await read($, usage)
       const before = await read($, lastUsd)
       const spent = use?.usd != null && before != null ? Math.max(0, use.usd - before) : 0
       await update($, lastUsd, () => use?.usd ?? before)
-      await recordStats($, (await read($, project)) || 'claude', done, spent)
-      await refreshHeat($)
+      const stats = await recordStats($, (await read($, project)) || 'claude', done, spent)
+      await Promise.all([refreshHeat($, stats), refreshSpend($, stats)])
+      const limit = await read($, budgetLimit)
+      const spentNow = await read($, spentToday)
+      const day = localDay(await $.clock.now())
+      if (s.budget && limit > 0 && spentNow >= limit * 0.8 && (await read($, budgetWarned)) !== day) {
+        await update($, budgetWarned, () => day)
+        void notice(
+          $,
+          `💰 Đã dùng ${Math.round((spentNow / limit) * 100)}% ngân sách hôm nay ($${spentNow.toFixed(2)} / $${limit.toFixed(2)})`,
+        )
+      }
 
       // Auto-compact (13): once per crossing; compacting runs after this turn has closed.
       const pct = use?.percent ?? 0
@@ -1415,10 +2119,10 @@ export const register: Register = on => {
       } else if (!(await read($, ctxWarned))) {
         await update($, ctxWarned, () => true)
         if (s.autocompact) {
-          $.ui.toast(`Context ${pct}%: đang tự /compact…`)
+          void notice($, `Context ${pct}%: đang tự /compact…`)
           $.clock.after(500, () => void $.session.compact({}).catch(() => undefined))
         } else {
-          $.ui.toast(`Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
+          void notice($, `Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
         }
       }
     } catch {
@@ -1452,17 +2156,43 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const Raster = 'Raster' in t ? t.Raster : undefined
     const Image = 'Image' in t ? t.Image : undefined
-    const name = (await read($, project)) || 'claude'
-    const repo = await read($, git)
-    const now = await read($, turn)
-    const prev = await read($, last)
-    const use = await read($, usage)
+    // One round trip for everything the band draws, not one per value.
+    const [
+      projectName,
+      repo,
+      now,
+      prev,
+      use,
+      countdown,
+      pick,
+      effect,
+      isSplash,
+      splashText,
+      limit,
+      spent,
+      checked,
+      todoList,
+    ] = await Promise.all([
+      read($, project),
+      read($, git),
+      read($, turn),
+      read($, last),
+      read($, usage),
+      read($, timer),
+      read($, autoModel),
+      read($, fx),
+      read($, splash),
+      read($, splashInfo),
+      read($, budgetLimit),
+      read($, spentToday),
+      read($, check),
+      read($, todos),
+    ])
+    const cards = s.notices ? await read($, notices) : []
+    const name = projectName || 'claude'
     const pct = use?.percent ?? null
-    const countdown = await read($, timer)
-    const pick = await read($, autoModel)
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
-    const effect = await read($, fx)
-    const hello = s.splash && (await read($, splash)) ? await read($, splashInfo) : null
+    const hello = s.splash && isSplash ? splashText : null
     const width = e.props.bodyColumns - (s.statecolor ? 4 : 0)
     bandSite = e.requestId
     fxWidth = Math.max(1, Math.min(width, 80))
@@ -1489,6 +2219,16 @@ export const register: Register = on => {
     for (const l of limits)
       segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
     if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink })
+    if (s.budget && limit > 0) {
+      segments.push({
+        text: `💰 $${spent.toFixed(2)}/$${limit.toFixed(0)}`,
+        color: P.pink,
+        meter: { pct: Math.round((spent / limit) * 100) },
+      })
+    }
+    if (checked) segments.push({ text: `${checked.ok ? '✓' : '✗'} check`, color: checked.ok ? P.ok : P.err })
+    const openTodos = todoList.filter(x => !x.done).length
+    if (s.todos && openTodos > 0) segments.push({ text: `☐ ${openTodos}`, color: P.violet })
     if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
     if (working && pick) segments.push({ text: `⚡${pick}`, color: P.info })
 
@@ -1599,6 +2339,24 @@ export const register: Register = on => {
         width={e.props.bodyColumns}
         {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
       >
+        {cards.map(n => {
+          const color = P[n.kind]
+          return (
+            <Box
+              key={`notice-${n.id}`}
+              flexDirection="row"
+              gap={1}
+              borderStyle="round"
+              borderColor={color}
+              paddingX={1}
+            >
+              <Text>{n.icon}</Text>
+              <Text color={color} bold wrap="wrap">
+                {n.text}
+              </Text>
+            </Box>
+          )
+        })}
         {welcome}
         <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
           {status}
@@ -1619,6 +2377,7 @@ export const register: Register = on => {
     const subs = await read($, agents)
     const turns = await read($, history)
     const counts = await read($, heat)
+    const opened = await read($, openCalls)
     const now = await $.clock.now()
     const room = Math.max(3, (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - subs.length)
     const HEAT = [P.muted, ...[0.15, 0.5, 0.8, 1].map(t => colorAt(P.grad, t))]
@@ -1639,25 +2398,6 @@ export const register: Register = on => {
       )
 
     // A hover card (36): hidden until its keyed row is hovered.
-    const card = (lines: string[], color: string) =>
-      s.hovercards ? (
-        <Box
-          position="absolute"
-          top={1}
-          left={2}
-          display="none"
-          hover={{ display: 'flex' }}
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={color}
-          paddingX={1}
-        >
-          {lines.map(l => (
-            <Text wrap="wrap">{l}</Text>
-          ))}
-        </Box>
-      ) : null
-
     return (
       <Box flexDirection="column" width={e.props.bodyColumns} gap={1}>
         {subs.length > 0 && (
@@ -1726,7 +2466,6 @@ export const register: Register = on => {
                   </Text>
                 ) : null}
                 <Button key={`diff-${f}`} label={baseName(f)} plain onPress={() => void showDiff($, f)} />
-                {card([f, 'bấm để xem diff'], tagColor)}
               </Box>
             )
           })}
@@ -1737,20 +2476,51 @@ export const register: Register = on => {
           {list
             .slice(-room)
             .reverse()
-            .map(call => (
-              <Box key={`call-${call.id}`} flexDirection="column">
-                <Text color={P[STATE_ROLE[call.state]]} bold={call.state === 'run'} wrap="wrap">
-                  {`${ICON[call.state]} ${call.tool}  ${call.label}`}
-                </Text>
-                {card(
-                  [
-                    `${call.tool} · ${call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`,
-                    call.label,
-                  ],
-                  P[STATE_ROLE[call.state]],
-                )}
-              </Box>
-            ))}
+            .map(call => {
+              const isOpen = opened.includes(call.id)
+              const short = shortLabel(call.label)
+              const status = call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'
+              return (
+                <Box key={`call-${call.id}`} flexDirection="column">
+                  <Box flexDirection="row" gap={1}>
+                    <Text
+                      color={P[STATE_ROLE[call.state]]}
+                      bold={call.state === 'run'}
+                      wrap="truncate-end"
+                      hover={s.hovercards ? { inverse: true } : undefined}
+                    >
+                      {`${ICON[call.state]} ${call.tool}  ${short}`}
+                    </Text>
+                    {
+                      <Button
+                        key={`call-open-${call.id}`}
+                        label={isOpen ? '▾' : '▸'}
+                        plain
+                        dimColor
+                        onPress={() =>
+                          void update($, openCalls, l =>
+                            l.includes(call.id) ? l.filter(x => x !== call.id) : [...l, call.id].slice(-50),
+                          )
+                        }
+                      />
+                    }
+                  </Box>
+                  {isOpen && (
+                    <Box
+                      flexDirection="column"
+                      paddingLeft={2}
+                      borderStyle="round"
+                      borderColor={P[STATE_ROLE[call.state]]}
+                    >
+                      <Text color={P[STATE_ROLE[call.state]]} bold>
+                        {`${call.tool} · ${status}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`}
+                      </Text>
+                      <Text wrap="wrap">{call.label || '(không có tham số)'}</Text>
+                    </Box>
+                  )}
+                </Box>
+              )
+            })}
         </Box>
       </Box>
     )
@@ -1813,10 +2583,14 @@ export const register: Register = on => {
                       if (!text.trim()) return
                       void $.session
                         .send({ to: { sessionId: peer.id }, text })
-                        .then(r =>
-                          $.ui.toast(r.isDelivered ? `✓ Đã gửi tới ${peer.name}` : `✗ Không gửi được: ${r.reason}`),
+                        .then(
+                          r =>
+                            void notice(
+                              $,
+                              r.isDelivered ? `✓ Đã gửi tới ${peer.name}` : `✗ Không gửi được: ${r.reason}`,
+                            ),
                         )
-                        .catch(() => $.ui.toast(`✗ Không gửi được tới ${peer.name}`))
+                        .catch(() => void notice($, `✗ Không gửi được tới ${peer.name}`))
                     }}
                   />
                 )}
@@ -1824,7 +2598,9 @@ export const register: Register = on => {
                   key={`resume-${peer.id}`}
                   label="Copy lệnh resume"
                   dimColor
-                  onPress={() => void $.ui.copy({ text: `cd ${peer.cwd} && claude --resume ${peer.id}` })}
+                  onPress={() =>
+                    void $.ui.copy({ text: `cd '${peer.cwd.replace(/'/g, `'\\''`)}' && claude --resume ${peer.id}` })
+                  }
                 />
               </Box>
             )}
@@ -1855,7 +2631,7 @@ export const register: Register = on => {
               hotkey={i < 9 ? String(i + 1) : undefined}
               onPress={() => {
                 void $.prompt.submit({ text })
-                $.ui.toast('Đã xếp hàng prompt')
+                void notice($, 'Đã xếp hàng prompt')
               }}
             />
             <Button
@@ -1937,7 +2713,7 @@ export const register: Register = on => {
     }
     const ask = (verb: string) => () => {
       void $.prompt.submit({ text: `${verb}:\n\n${text}` })
-      $.ui.toast('Đã xếp hàng prompt')
+      void notice($, 'Đã xếp hàng prompt')
     }
 
     return (
@@ -1977,6 +2753,201 @@ export const register: Register = on => {
             <Text>{h.snippet}</Text>
           </Box>
         ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: TODO_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const list = await read($, todos)
+    const open = list.filter(x => !x.done).length
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>
+          {open} đang mở · {list.length - open} xong · bấm để đánh dấu
+        </Text>
+        {list.length === 0 && <Text color={P.muted}>Chưa có TODO. Thêm ở ô dưới hoặc /mods todo &lt;việc&gt;.</Text>}
+        {list.map((item, i) => (
+          <Box key={`todo-${i}`} flexDirection="row" gap={1}>
+            <Button
+              key={`todo-toggle-${i}`}
+              label={`${item.done ? '☑' : '☐'} ${item.text}${item.file ? `  (${baseName(item.file)})` : ''}`}
+              plain
+              dimColor={item.done}
+              onPress={() => void setTodos($, l => l.map((x, j) => (j === i ? { ...x, done: !x.done } : x)))}
+            />
+            <Button
+              key={`todo-del-${i}`}
+              label="✕"
+              dimColor
+              onPress={() => void setTodos($, l => l.filter((_, j) => j !== i))}
+            />
+          </Box>
+        ))}
+        <Box flexDirection="row" gap={1} marginTop={1}>
+          <Button
+            key="todo-clear"
+            label="Xóa việc đã xong"
+            dimColor
+            onPress={() => void setTodos($, l => l.filter(x => !x.done))}
+          />
+        </Box>
+        {Input ? (
+          <Input
+            key="todo-new"
+            placeholder="Thêm việc…"
+            submitLabel="Thêm"
+            onSubmit={text => {
+              if (text.trim()) void addTodos($, [{ text: text.trim(), done: false }])
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: NOTES_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const list = await read($, notes)
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>Ghi chú của dự án, giữ qua các session.</Text>
+        {list.length === 0 && <Text color={P.muted}>Chưa có ghi chú.</Text>}
+        {list.map((note, i) => (
+          <Box key={`note-${i}`} flexDirection="row" gap={1}>
+            <Text color={P.accent}>•</Text>
+            <Text wrap="wrap">{note}</Text>
+            <Button
+              key={`note-del-${i}`}
+              label="✕"
+              dimColor
+              onPress={() => void setNotes($, l => l.filter((_, j) => j !== i))}
+            />
+          </Box>
+        ))}
+        {list.length > 0 && (
+          <Box flexDirection="row" marginTop={1}>
+            <Button
+              key="notes-send"
+              label="Gửi ghi chú cho Claude"
+              onPress={() => {
+                void $.prompt.submit({ text: `Ghi chú của tôi cho dự án này:\n${list.map(n => `- ${n}`).join('\n')}` })
+                void notice($, 'Đã xếp hàng prompt')
+              }}
+            />
+          </Box>
+        )}
+        {Input ? (
+          <Input
+            key="note-new"
+            placeholder="Ghi chú mới…"
+            submitLabel="Lưu"
+            onSubmit={text => {
+              if (text.trim()) void setNotes($, l => [...l, text.trim()].slice(-50))
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: COMMIT_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const draft = await read($, commitDraft)
+    if (!draft) return <Text color={P.muted}>Gõ /mods commit để soạn message từ phần đã stage.</Text>
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color={P.muted}>{draft.files} file đã stage · commit chạy không kèm git hooks</Text>
+        {draft.note && <Text color={P.warn}>{draft.note}</Text>}
+        {draft.message && (
+          <Box borderStyle="round" borderColor={P.accent} paddingX={1} marginY={1}>
+            <Text wrap="wrap">{draft.message}</Text>
+          </Box>
+        )}
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {draft.message && <Button key="commit-go" label="Commit" hotkey="1" onPress={() => void commitNow($)} />}
+          {draft.message && (
+            <Button
+              key="commit-copy"
+              label="Copy lệnh (chạy cả hooks)"
+              hotkey="2"
+              onPress={() =>
+                void $.ui.copy({ text: `git commit -m '${draft.message.replace(/'/g, `'\\''`)}'`, surface: e.surface })
+              }
+            />
+          )}
+          <Button key="commit-redo" label="Viết lại" hotkey="3" onPress={() => void draftCommit($)} />
+          {draft.files === 0 && (
+            <Button
+              key="commit-stage"
+              label="Stage tất cả"
+              hotkey="4"
+              onPress={() =>
+                void (async () => {
+                  const base = await read($, root)
+                  if (await gitIsSafe($, base)) await stageAll($, base)
+                  await draftCommit($)
+                })()
+              }
+            />
+          )}
+          <Button key="commit-cancel" label="Hủy" dimColor onPress={() => void update($, commitDraft, () => null)} />
+        </Box>
+        {Input ? (
+          <Input
+            key="commit-edit"
+            placeholder="Hoặc tự gõ message…"
+            submitLabel="Dùng"
+            onSubmit={text => {
+              if (text.trim()) void update($, commitDraft, d => (d ? { ...d, message: text.trim(), note: '' } : d))
+            }}
+          />
+        ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
+    const P = await palette($)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const b = await read($, breakdown)
+    if (!b) return <Text color={P.muted}>Chưa có số liệu (cần ít nhất một lượt).</Text>
+    const width = Math.max(10, e.props.bodyColumns - 34)
+    const top = [...b.categories].sort((x, y) => y.tokens - x.tokens)
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Box flexDirection="row">
+          {meterCells(Math.round((b.total / Math.max(1, b.max)) * 100), Math.min(30, width), P).map(c => (
+            <Text color={c.color}>{c.ch}</Text>
+          ))}
+          <Text color={P.muted}>{`  ${Math.round(b.total / 1000)}k / ${Math.round(b.max / 1000)}k token`}</Text>
+        </Box>
+        {top.map(c => {
+          const cells = Math.max(1, Math.round((c.tokens / Math.max(1, b.total)) * width))
+          return (
+            <Box flexDirection="row">
+              <Text wrap="truncate-end">{c.name.slice(0, 22).padEnd(23)}</Text>
+              <Text color={c.color}>{'█'.repeat(cells)}</Text>
+              <Text color={P.muted}>{` ${(c.tokens / 1000).toFixed(1)}k`}</Text>
+            </Box>
+          )
+        })}
+        <Box marginTop={1}>
+          <Button key="context-refresh" label="Làm mới" dimColor onPress={() => void refreshBreakdown($)} />
+        </Box>
       </Box>
     )
   })
@@ -2025,6 +2996,7 @@ export const register: Register = on => {
         : isErrored
           ? ['✗', P.err]
           : ['✓', P.ok]
+    const badgeCardWidth = Math.max(20, (e.viewport?.columns ?? 80) - 8)
     const fields = Object.entries((e.props.input ?? {}) as Record<string, unknown>)
       .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
       .map(
@@ -2040,29 +3012,92 @@ export const register: Register = on => {
         <Text backgroundColor={color} color={P.ink} bold>
           {` ${name} `}
         </Text>
-        <Text color={P.muted} wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}>
+        <Text
+          color={P.muted}
+          wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}
+          hover={s.hovercards ? { color: color, bold: true } : undefined}
+        >
           {summaryOf(e.props.input)}
         </Text>
-        {s.hovercards && fields.length > 0 ? (
-          <Box
-            position="absolute"
-            top={1}
-            left={4}
-            display="none"
-            hover={{ display: 'flex' }}
-            flexDirection="column"
-            borderStyle="round"
-            borderColor={color}
-            paddingX={1}
-          >
-            <Text color={color} bold>
-              {name}
-            </Text>
-            {fields.map(f => (
-              <Text wrap="wrap">{f}</Text>
-            ))}
+      </Box>
+    )
+  })
+
+  // /mods output in color: a card with gradient headings, commands in the
+  // accent, [bật]/[tắt] as colored dots, and ✓/✗ results by outcome.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'mods' } }, async ($, e, next) => {
+    const P = await palette($)
+    if (e.props.isErrored || !(await read($, settings)).decor) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const lines = e.props.text
+      .replace(/^terminal-polish:\s*/, '')
+      .replace(/\n+$/, '')
+      .split('\n')
+    const ICONS: Record<string, string> = { Bảng: '📊', 'Công cụ': '🧰', 'Phiên bản': '🔄', 'Bật/tắt': '🔀' }
+    const RESULT: Record<string, string> = { '✓': P.ok, '✗': P.err, '⚠': P.warn, '🔐': P.warn, '💰': P.pink }
+
+    const gradient = (text: string) =>
+      gradientRuns(text, P.grad).map(r => (
+        <Text color={r.color} bold>
+          {r.ch}
+        </Text>
+      ))
+
+    const view = (line: string, i: number) => {
+      if (i === 0 && line.startsWith('Cách dùng')) {
+        return (
+          <Box flexDirection="row" gap={2} marginBottom={1}>
+            <Box flexDirection="row">{gradient('◆ terminal-polish')}</Box>
+            <Text color={P.muted}>{line}</Text>
           </Box>
-        ) : null}
+        )
+      }
+      const toggle = line.match(/^ {2}(\S+)\s+\[(bật|tắt)\] (.*)$/)
+      if (toggle) {
+        const [, key = '', state, desc = ''] = toggle
+        const isOn = state === 'bật'
+        return (
+          <Box flexDirection="row">
+            <Text color={isOn ? P.ok : P.muted}>{isOn ? '  ● ' : '  ○ '}</Text>
+            <Text color={isOn ? P.accent : P.muted} bold={isOn}>
+              {key.padEnd(12)}
+            </Text>
+            <Text color={isOn ? undefined : P.muted} dimColor={!isOn} wrap="truncate-end">
+              {desc}
+            </Text>
+          </Box>
+        )
+      }
+      if (/^\S.*:$/.test(line)) {
+        const label = line.replace(/:$/, '')
+        const icon = Object.entries(ICONS).find(([k]) => label.startsWith(k))?.[1] ?? '▸'
+        return (
+          <Box flexDirection="row" marginTop={i > 0 ? 1 : 0}>
+            <Text>{`${icon} `}</Text>
+            {gradient(label)}
+          </Box>
+        )
+      }
+      const command = line.match(/^ {2}(\S.*?)\s{2,}(.*)$/)
+      if (command) {
+        return (
+          <Box flexDirection="row">
+            <Text color={P.info} bold>{`  ${(command[1] ?? '').padEnd(18)}`}</Text>
+            <Text wrap="truncate-end">{command[2]}</Text>
+          </Box>
+        )
+      }
+      const mark = [...line.trimStart()][0] ?? ''
+      return (
+        <Text color={RESULT[mark]} wrap="wrap">
+          {line || ' '}
+        </Text>
+      )
+    }
+
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor={P.accent} paddingX={1}>
+        {lines.map(view)}
       </Box>
     )
   })
@@ -2085,13 +3120,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const P = await palette($)
     if (!(await read($, settings)).decor) return next(e)
     return next({ ...e, props: { ...e.props, word: SPINNER_WORDS[e.props.mode] } })
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const P = await palette($)
     if (!(await read($, settings)).decor || e.props.isDraft) return next(e)
     return next({ ...e, props: { ...e.props, tail: '· /mods ⚙' } })
   })
