@@ -28,6 +28,12 @@ test('guard denies dangerous spellings and lets safe siblings through', async ($
     `sudo ${R} -Rf /`,
     `echo $(${R} -rf /)`,
     `cd x && ${R} -rf ~`,
+    // The shell drops quotes and backslashes; the guard must read the same word.
+    `\\${R} -rf /`,
+    `r''m -rf /`,
+    `${R} -rf "$HOME"/`,
+    `${R} -rf '/'`,
+    `git --git-dir .git push --force origin main`,
   ]) {
     expect(said(await $.tool.call({ tool: 'Bash', command }))).toContain('terminal-polish')
   }
