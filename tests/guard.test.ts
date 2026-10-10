@@ -3,7 +3,9 @@ import { expect, test } from 'claude-code/testing'
 const said = (r: { deny?: string; text?: string }) => r.deny ?? r.text ?? ''
 
 // The guard is a security path: one check that it denies the dangerous
-// spelling and lets the safe sibling through to what lies beneath.
+// spelling and lets the safe sibling through to what lies beneath. No clock
+// is mocked on purpose: the bookkeeping hook then fails, and the guard must
+// hold anyway.
 test('guard denies a force-push to main and lets --force-with-lease through', async ($, on) => {
   on('tool.call', () => ({ deny: 'reached-bottom' }))
   on('ui.toast', () => ({ value: undefined }))

@@ -109,3 +109,18 @@ test('"Bật hết" turns every feature on in one write', async ($, on) => {
   }
   await ui.unmount()
 })
+
+test('the settings tab switches the theme', async ($, on) => {
+  mock.store(on)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'terminal-polish-settings',
+    props: { title: 'Cài đặt', ...PANE_PROPS },
+  })
+  expect((await ui.find({ key: 'theme-auto' }))?.text).toContain('● auto')
+  await ui.press({ key: 'theme-dracula' })
+  expect((await ui.find({ key: 'theme-dracula' }))?.text).toContain('● dracula')
+  await ui.unmount()
+})

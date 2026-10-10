@@ -11,8 +11,8 @@ import type {
   Limit,
   Peer,
   Settings,
+  SplashInfo,
   TimerState,
-  Totals,
   Turn,
   Usage,
 } from '../types'
@@ -54,6 +54,17 @@ const DEFAULTS: Settings = {
   journal: true,
   collapse: true,
   badges: true,
+  gradient: true,
+  powerline: false,
+  meters: true,
+  statecolor: true,
+  fileicons: true,
+  anim: true,
+  confetti: true,
+  splash: true,
+  heatmap: true,
+  hovercards: true,
+  images: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -73,6 +84,17 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   journal: 'ghi nhật ký khi đóng session vào ~/.claude/mods-journal.md',
   collapse: 'thu gọn output Bash dài còn 3 dòng',
   badges: 'badge màu cho từng dòng tool',
+  gradient: 'chữ chuyển màu cho tên dự án và tiêu đề',
+  powerline: 'dải trạng thái kiểu powerline (cần font Nerd Font)',
+  meters: 'thanh đo màu ▰▰▱ cho context và quota',
+  statecolor: 'viền dải trạng thái đổi màu theo trạng thái',
+  fileicons: 'nhãn màu theo loại file trong bảng hoạt động',
+  anim: 'vệt sáng chạy khi Claude đang làm (chỉ terminal)',
+  confetti: 'pháo hoa khi test pass hoặc xong việc dài (chỉ terminal)',
+  splash: 'màn chào khi mở session',
+  heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
+  hovercards: 'thẻ chi tiết khi rê chuột (fullscreen)',
+  images: 'ảnh logo ở màn chào (kitty/Ghostty)',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 
@@ -102,9 +124,14 @@ const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
+const theme = atom({ plugin: 'terminal-polish', key: 'theme' } as const, 'auto')
+const fx = atom({ plugin: 'terminal-polish', key: 'fx' } as const, null)
+const splash = atom({ plugin: 'terminal-polish', key: 'splash' } as const, false)
+const splashInfo = atom({ plugin: 'terminal-polish', key: 'splashInfo' } as const, null)
+const heat = atom({ plugin: 'terminal-polish', key: 'heat' } as const, {})
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
-const COLOR = { run: 'warning', ok: 'success', fail: 'error' } as const
+const STATE_ROLE = { run: 'warn', ok: 'ok', fail: 'err' } as const
 const BARS = '▁▂▃▄▅▆▇█'
 const SPINNER_WORDS = {
   requesting: 'Đang gửi',
@@ -172,11 +199,6 @@ function dangerOf(command: string) {
 
 function isSecretFile(path: string) {
   return SECRET_FILE.test(path) && !SECRET_TEMPLATE.test(path)
-}
-
-function spark(values: number[]) {
-  const max = Math.max(1, ...values)
-  return values.map(v => BARS[Math.min(7, Math.floor((v / max) * 7))] ?? '').join('')
 }
 
 function duration(ms: number) {
@@ -431,7 +453,6 @@ const localDay = (ms: number) => {
   const d = new Date(ms)
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
-const levelColor = (pct: number) => (pct >= 80 ? 'error' : pct >= 60 ? 'warning' : 'subtle')
 
 // ---- stats (12, 14): kept across sessions in $.store, one row per day and project
 type DayStats = { turns: number; seconds: number; tools: number; usd: number }
@@ -645,14 +666,15 @@ async function writeJournal($: EngineInterface) {
 
 // ---- tool badges (25): only tools whose own row is a single line; Edit,
 // Write, TodoWrite and the like draw a diff or a list the badge would hide.
-const BADGE: Record<string, string> = {
-  Bash: 'warning',
-  Read: 'suggestion',
-  Grep: 'permission',
-  Glob: 'permission',
-  Agent: 'claude',
-  WebFetch: 'ide',
-  WebSearch: 'ide',
+type BadgeRole = 'warn' | 'info' | 'violet' | 'accent' | 'cyan' | 'pink'
+const BADGE: Record<string, BadgeRole> = {
+  Bash: 'warn',
+  Read: 'info',
+  Grep: 'violet',
+  Glob: 'violet',
+  Agent: 'accent',
+  WebFetch: 'cyan',
+  WebSearch: 'cyan',
 }
 
 function summaryOf(input: unknown) {
@@ -676,6 +698,343 @@ const openSettings = ($: EngineInterface) => $.ui.open({ id: SETTINGS_PANE, titl
 const REVIEWER_PROMPT = `You review code changes. Read the diff or files you are pointed at, then report only real problems: correctness bugs, security issues, missed edge cases, and needless complexity. For each finding give file:line, what goes wrong, and the smallest fix. Do not edit files. If nothing is wrong, say so plainly. Answer in the language the request was written in.`
 const TESTER_PROMPT = `You test a change. Find how the project runs its tests, write the smallest tests that would fail if the change were wrong, run them, and report the exact commands and their output. Do not change non-test code. If something fails, show the failure and your best reading of its cause. Answer in the language the request was written in.`
 
+// ================================================================ look and feel
+// A palette names roles, not hues. `auto` keeps the person's Claude Code theme
+// (theme keys) and adds hex only where a gradient needs real colors; the named
+// themes are their published dark palettes.
+type Palette = {
+  accent: string
+  ok: string
+  warn: string
+  err: string
+  info: string
+  muted: string
+  violet: string
+  cyan: string
+  pink: string
+  ink: string
+  grad: readonly string[]
+  meter: readonly [string, string, string]
+}
+
+const AUTO: Palette = {
+  accent: 'claude',
+  ok: 'success',
+  warn: 'warning',
+  err: 'error',
+  info: 'suggestion',
+  muted: 'subtle',
+  violet: 'permission',
+  cyan: 'ide',
+  pink: 'merged',
+  ink: 'inverseText',
+  grad: ['#d97757', '#e0779d', '#b07ae0', '#6c8ee8'],
+  meter: ['#3fb950', '#d29922', '#f85149'],
+}
+
+const THEMES: Record<string, Palette> = {
+  auto: AUTO,
+  catppuccin: {
+    accent: '#cba6f7',
+    ok: '#a6e3a1',
+    warn: '#f9e2af',
+    err: '#f38ba8',
+    info: '#89b4fa',
+    muted: '#7f849c',
+    violet: '#b4befe',
+    cyan: '#94e2d5',
+    pink: '#f5c2e7',
+    ink: '#1e1e2e',
+    grad: ['#f5c2e7', '#cba6f7', '#89b4fa', '#94e2d5'],
+    meter: ['#a6e3a1', '#f9e2af', '#f38ba8'],
+  },
+  tokyonight: {
+    accent: '#7aa2f7',
+    ok: '#9ece6a',
+    warn: '#e0af68',
+    err: '#f7768e',
+    info: '#7dcfff',
+    muted: '#565f89',
+    violet: '#bb9af7',
+    cyan: '#2ac3de',
+    pink: '#ff007c',
+    ink: '#1a1b26',
+    grad: ['#bb9af7', '#7aa2f7', '#7dcfff', '#9ece6a'],
+    meter: ['#9ece6a', '#e0af68', '#f7768e'],
+  },
+  dracula: {
+    accent: '#bd93f9',
+    ok: '#50fa7b',
+    warn: '#f1fa8c',
+    err: '#ff5555',
+    info: '#8be9fd',
+    muted: '#6272a4',
+    violet: '#bd93f9',
+    cyan: '#8be9fd',
+    pink: '#ff79c6',
+    ink: '#282a36',
+    grad: ['#ff79c6', '#bd93f9', '#8be9fd', '#50fa7b'],
+    meter: ['#50fa7b', '#f1fa8c', '#ff5555'],
+  },
+  nord: {
+    accent: '#88c0d0',
+    ok: '#a3be8c',
+    warn: '#ebcb8b',
+    err: '#bf616a',
+    info: '#81a1c1',
+    muted: '#616e88',
+    violet: '#b48ead',
+    cyan: '#8fbcbb',
+    pink: '#b48ead',
+    ink: '#2e3440',
+    grad: ['#8fbcbb', '#88c0d0', '#81a1c1', '#b48ead'],
+    meter: ['#a3be8c', '#ebcb8b', '#bf616a'],
+  },
+  gruvbox: {
+    accent: '#fe8019',
+    ok: '#b8bb26',
+    warn: '#fabd2f',
+    err: '#fb4934',
+    info: '#83a598',
+    muted: '#928374',
+    violet: '#d3869b',
+    cyan: '#8ec07c',
+    pink: '#d3869b',
+    ink: '#282828',
+    grad: ['#fb4934', '#fe8019', '#fabd2f', '#b8bb26'],
+    meter: ['#b8bb26', '#fabd2f', '#fb4934'],
+  },
+}
+
+async function palette($: EngineInterface): Promise<Palette> {
+  return THEMES[await read($, theme)] ?? AUTO
+}
+
+async function setTheme($: EngineInterface, name: string) {
+  await update($, theme, () => name)
+  await $.store.set('theme', name)
+}
+
+const rgbOf = (hex: string) => {
+  const n = Number.parseInt(hex.replace('#', ''), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255] as const
+}
+const hexOf = (r: number, g: number, b: number) =>
+  `#${[r, g, b]
+    .map(v =>
+      Math.round(Math.max(0, Math.min(255, v)))
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`
+
+// The color at t (0..1) along evenly spaced hex stops.
+function colorAt(stops: readonly string[], t: number) {
+  if (stops.length === 1) return stops[0] ?? '#ffffff'
+  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1)
+  const i = Math.min(Math.floor(x), stops.length - 2)
+  const [a, b] = [rgbOf(stops[i] ?? '#ffffff'), rgbOf(stops[i + 1] ?? '#ffffff')]
+  const f = x - i
+  return hexOf(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f)
+}
+
+// One colored run per character.
+const gradientRuns = (text: string, stops: readonly string[]) =>
+  [...text].map((ch, i, all) => ({ ch, color: colorAt(stops, all.length < 2 ? 0 : i / (all.length - 1)) }))
+
+// ▰▰▰▱▱: lit cells colored by where they sit on green → amber → red.
+function meterCells(pct: number, width: number, P: Palette) {
+  const lit = Math.round((Math.max(0, Math.min(100, pct)) / 100) * width)
+  return Array.from({ length: width }, (_, i) =>
+    i < lit ? { ch: '▰', color: colorAt(P.meter, width < 2 ? 0 : i / (width - 1)) } : { ch: '▱', color: P.muted },
+  )
+}
+
+// ---- Raster frames (32, 33): three uint32 per cell, glyph, fg, bg, as base64.
+const DEFAULT_COLOR = 0x01000000
+const DIM_LINE = 0x5c5c5c
+const hexNum = (hex: string) => Number.parseInt(hex.replace('#', ''), 16)
+
+function packCells(cells: readonly (readonly [number, number, number])[]) {
+  const words = new Uint32Array(cells.length * 3)
+  cells.forEach(([glyph, fg, bg], i) => words.set([glyph, fg, bg], i * 3))
+  const bytes = new Uint8Array(words.buffer)
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}
+
+const COMET_TAIL = 10
+const SPARKS = [...'✦✧•·*+˚']
+
+function fxFrame(mode: 'comet' | 'party', tick: number, width: number, P: Palette) {
+  if (mode === 'comet') {
+    const head = tick % (width + COMET_TAIL)
+    return packCells(
+      Array.from({ length: width }, (_, i) => {
+        const d = head - i
+        if (d < 0 || d >= COMET_TAIL) return [0x2500, DIM_LINE, DEFAULT_COLOR] as const
+        return [d < 2 ? 0x2501 : 0x2500, hexNum(colorAt(P.grad, d / COMET_TAIL)), DEFAULT_COLOR] as const
+      }),
+    )
+  }
+  // Party: sparks that differ every frame, seeded by the tick so a frame is stable.
+  let seed = ((tick + 1) * 2654435761) >>> 0
+  const rand = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296
+  return packCells(
+    Array.from({ length: width }, () =>
+      rand() < 0.35
+        ? ([
+            SPARKS[Math.floor(rand() * SPARKS.length)]?.codePointAt(0) ?? 0x2a,
+            hexNum(colorAt(P.grad, rand())),
+            DEFAULT_COLOR,
+          ] as const)
+        : ([0x20, DEFAULT_COLOR, DEFAULT_COLOR] as const),
+    ),
+  )
+}
+
+// The band's site and width as last drawn, so a timer can repaint the Raster.
+let bandSite: string | null = null
+let fxWidth = 0
+let fxTick = 0
+let fxTimer: Timer | null = null
+const FX_MS = 80
+const PARTY_MS = 2600
+
+function stopFx() {
+  fxTimer?.cancel()
+  fxTimer = null
+}
+
+async function startFx($: EngineInterface, mode: 'comet' | 'party') {
+  const s = await read($, settings)
+  if ((mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
+  stopFx()
+  fxTick = 0
+  await update($, fx, () => mode)
+  const P = await palette($)
+  fxTimer = $.clock.every(FX_MS, () => {
+    fxTick += 1
+    if (!bandSite || fxWidth < 1) return
+    void $.ui.blit({ requestId: bandSite, key: 'fx', cells: fxFrame(mode, fxTick, fxWidth, P) }).catch(() => undefined)
+  })
+  if (mode === 'party') {
+    $.clock.after(PARTY_MS, () => void endFx($, 'party'))
+  }
+}
+
+async function endFx($: EngineInterface, mode: 'comet' | 'party') {
+  if ((await read($, fx)) !== mode) return
+  stopFx()
+  await update($, fx, () => null)
+  // A party that ends while a turn still runs hands the band back to the comet.
+  if (mode === 'party' && (await read($, turn))) await startFx($, 'comet')
+}
+
+const TEST_COMMAND =
+  /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|go test|cargo test|mix test|rspec|claude plugin test)\b/
+
+// ---- file tags (31)
+const FILE_TAGS: Record<string, readonly [string, string]> = {
+  ts: ['TS', '#3178c6'],
+  tsx: ['TSX', '#3178c6'],
+  js: ['JS', '#f1e05a'],
+  jsx: ['JSX', '#f1e05a'],
+  mjs: ['JS', '#f1e05a'],
+  py: ['PY', '#3572a5'],
+  md: ['MD', '#83a598'],
+  json: ['{}', '#cbcb41'],
+  go: ['GO', '#00add8'],
+  rs: ['RS', '#dea584'],
+  sh: ['SH', '#89e051'],
+  zsh: ['SH', '#89e051'],
+  css: ['CSS', '#a86bd1'],
+  scss: ['CSS', '#c6538c'],
+  html: ['HTML', '#e34c26'],
+  yml: ['YML', '#cb171e'],
+  yaml: ['YML', '#cb171e'],
+  sql: ['SQL', '#e38c00'],
+  java: ['JAVA', '#b07219'],
+  kt: ['KT', '#a97bff'],
+  rb: ['RB', '#cc342d'],
+  php: ['PHP', '#777bb4'],
+}
+const fileTag = (path: string) => FILE_TAGS[path.split('.').pop()?.toLowerCase() ?? ''] ?? (['··', '#8b949e'] as const)
+
+// ---- heatmap (35): turns per day, 8 weeks, a row per weekday
+const HEAT_WEEKS = 8
+const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+
+async function refreshHeat($: EngineInterface) {
+  const stats = await loadStats($)
+  const value = Object.fromEntries(
+    Object.entries(stats).map(([day, rows]) => [day, Object.values(rows).reduce((n, r) => n + r.turns, 0)]),
+  )
+  await update($, heat, () => value)
+}
+
+// Columns are weeks ending this week, rows Sunday..Saturday; null past today.
+function heatGrid(counts: Record<string, number>, now: number) {
+  const today = new Date(now)
+  const firstSunday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - today.getDay() - (HEAT_WEEKS - 1) * 7,
+  )
+  const max = Math.max(1, ...Object.values(counts))
+  return Array.from({ length: 7 }, (_, weekday) =>
+    Array.from({ length: HEAT_WEEKS }, (_, week) => {
+      const d = new Date(firstSunday.getFullYear(), firstSunday.getMonth(), firstSunday.getDate() + week * 7 + weekday)
+      if (d.getTime() > now) return null
+      const n = counts[localDay(d.getTime())] ?? 0
+      return n === 0 ? 0 : 1 + Math.min(3, Math.floor((n / max) * 3.999))
+    }),
+  )
+}
+
+// ---- splash (34)
+const LOGO = ['╔═╗╦  ╔═╗╦ ╦╔╦╗╔═╗', '║  ║  ╠═╣║ ║ ║║║╣ ', '╚═╝╩═╝╩ ╩╚═╝═╩╝╚═╝']
+const TIPS = [
+  'Bấm [Cài đặt] để bật/tắt nhanh mọi tính năng.',
+  '/mods theme dracula để đổi màu cả giao diện.',
+  'Gõ ;fix sau khi lưu bằng /mods abbrev ;fix <nội dung>.',
+  '/mods rule <luật> để Claude luôn nhớ quy ước của dự án.',
+  '/mods timer 25 cho một phiên pomodoro.',
+  'Bôi đen một đoạn rồi bấm [Chọn] để giải thích hoặc dịch.',
+  '/mods find <từ> tìm lại mọi thứ trong hội thoại.',
+  '/mods stats xem bạn đã tiêu bao nhiêu tuần này.',
+]
+
+async function buildSplash($: EngineInterface) {
+  const now = await $.clock.now()
+  const hour = new Date(now).getHours()
+  const greet =
+    hour < 11 ? 'Chào buổi sáng' : hour < 14 ? 'Chào buổi trưa' : hour < 18 ? 'Chào buổi chiều' : 'Chào buổi tối'
+  const who = baseName(await read($, home)) || 'bạn'
+  const stats = await loadStats($)
+  const today = localDay(now)
+  const prev = Object.keys(stats)
+    .filter(d => d < today)
+    .sort()
+    .pop()
+  let lastLine = 'Chưa có số liệu lần trước, bắt đầu thôi!'
+  if (prev) {
+    const rows = stats[prev] ?? {}
+    const sum = Object.values(rows).reduce(
+      (a, r) => ({ turns: a.turns + r.turns, seconds: a.seconds + r.seconds, usd: a.usd + r.usd }),
+      { turns: 0, seconds: 0, usd: 0 },
+    )
+    lastLine = `Lần trước (${prev}): ${sum.turns} lượt · ${duration(sum.seconds * 1000)} · $${sum.usd.toFixed(2)} · ${Object.keys(rows).join(', ')}`
+  }
+  const info: SplashInfo = {
+    greeting: `${greet}, ${who} 👋`,
+    last: lastLine,
+    tip: `💡 ${TIPS[Math.floor(now / 60000) % TIPS.length] ?? ''}`,
+  }
+  await update($, splashInfo, () => info)
+}
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -689,6 +1048,7 @@ async function helpText($: EngineInterface) {
     '  prompts   prompt nhanh: bấm để gửi',
     '  save <x>  lưu x thành một prompt nhanh',
     '  settings  tab cài đặt: bật/tắt nhanh mọi tính năng',
+    `  theme <x> bảng màu: ${Object.keys(THEMES).join(' | ')}`,
     '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
     '  find <x>  tìm x trong hội thoại này',
     'Công cụ:',
@@ -707,19 +1067,23 @@ async function helpText($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const ran = await next(e)
+    // A reload keeps state but not timers: an effect left set would freeze on the band.
+    await update($, fx, () => null).catch(() => undefined)
     // `/mods` first and alone: nothing after it may take the command down.
     try {
       await $.command.register({
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
+          'settings | theme <x> | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
       })
     } catch {
       $.ui.toast('terminal-polish: không đăng ký được /mods')
     }
     try {
       await loadSettings($)
+      const savedTheme = await $.store.get('theme')
+      if (typeof savedTheme === 'string' && savedTheme in THEMES) await update($, theme, () => savedTheme)
     } catch {
       // Defaults stay.
     }
@@ -738,6 +1102,8 @@ export const register: Register = on => {
     await refreshUsage($)
     try {
       const now = await $.clock.now()
+      // First load of this session (a hot reload keeps startedAt): greet once.
+      if ((await read($, startedAt)) === 0) await update($, splash, () => true)
       await update($, startedAt, t => t || now)
       await update($, lastUsd, () => null)
       const use = await read($, usage)
@@ -779,6 +1145,8 @@ export const register: Register = on => {
     try {
       const homeDir = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
       await update($, home, () => homeDir)
+      await refreshHeat($)
+      await buildSplash($)
       const selfId = await $.session.id()
       const dir = `${homeDir}/.claude/sessions`
       await refreshPeers($, dir, selfId)
@@ -805,6 +1173,14 @@ export const register: Register = on => {
         return placed(await openPrompts($), 'Đã mở prompt nhanh.')
       case 'settings':
         return placed(await openSettings($), 'Đã mở tab cài đặt.')
+      case 'theme': {
+        const name = args.slice(word.length).trim().toLowerCase()
+        if (!(name in THEMES)) {
+          return { text: `Theme: ${Object.keys(THEMES).join(' | ')} (đang dùng: ${await read($, theme)})` }
+        }
+        await setTheme($, name)
+        return { text: `Đã đổi theme: ${name}${name === 'auto' ? ' (theo theme Claude Code)' : ''}` }
+      }
       case 'sel':
         return {
           text: (await grabSelection($))
@@ -853,6 +1229,8 @@ export const register: Register = on => {
     const value: Turn = { tools: 0, failed: 0 }
     await update($, turn, () => value)
     await update($, autoModel, () => null)
+    await update($, splash, () => false)
+    if ((await read($, fx)) !== 'party') void startFx($, 'comet')
     if ((await read($, settings)).automodel && e.text.trim()) {
       try {
         const label = await $.model.classify(
@@ -927,29 +1305,6 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Bookkeeping: fails open, a fault here never blocks a tool.
-  on('tool.call', async ($, e, next) => {
-    const path = e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'Read' ? e.file_path : undefined
-    const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
-    const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
-    await update($, calls, list => [...list, call].slice(-100))
-    await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
-
-    const ran = await next(e)
-    const isFailed = ran.deny !== undefined || ran.isError === true
-    await update($, calls, list =>
-      list.map(one => (one.id === call.id ? { ...one, state: isFailed ? ('fail' as const) : ('ok' as const) } : one)),
-    )
-    if (isFailed) {
-      await update($, turn, t => (t ? { ...t, failed: t.failed + 1 } : t))
-    }
-    if (!isFailed && path && e.tool !== 'Read') {
-      await update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30))
-    }
-
-    return ran
-  }).catch(($, e, next) => next(e))
-
   // Guard: fails closed, a fault here denies rather than waves through.
   const guard = (reason: string) => ({
     deny: `terminal-polish đã chặn: ${reason}. Hỏi người dùng; họ có thể tự chạy lệnh hoặc tắt bằng /mods guard.`,
@@ -975,6 +1330,48 @@ export const register: Register = on => {
     return guard(`ghi file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
+  // Bookkeeping: fails open. Every step around `next` is caught, so a fault
+  // here can neither block a tool nor knock the guard out of the chain.
+  on('tool.call', async ($, e, next) => {
+    const path = e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'Read' ? e.file_path : undefined
+    const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
+    const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
+    let began = 0
+    try {
+      began = await $.clock.now()
+      await update($, calls, list => [...list, call].slice(-100))
+      await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
+    } catch {
+      // The row is only display.
+    }
+
+    const ran = await next(e)
+
+    try {
+      const elapsed = began ? (await $.clock.now()) - began : undefined
+      const isFailed = ran.deny !== undefined || ran.isError === true
+      if (!isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
+        $.ui.toast('🎉 Test pass!')
+        void startFx($, 'party')
+      }
+      await update($, calls, list =>
+        list.map(one =>
+          one.id === call.id ? { ...one, state: isFailed ? ('fail' as const) : ('ok' as const), ms: elapsed } : one,
+        ),
+      )
+      if (isFailed) {
+        await update($, turn, t => (t ? { ...t, failed: t.failed + 1 } : t))
+      }
+      if (!isFailed && path && e.tool !== 'Read') {
+        await update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30))
+      }
+    } catch {
+      // The row is only display.
+    }
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     const ran = await next(e)
@@ -985,6 +1382,8 @@ export const register: Register = on => {
     await update($, history, list => [...list, done].slice(-20))
     await update($, turn, () => null)
     await update($, autoModel, () => null)
+    await endFx($, 'comet')
+    if (done.seconds >= TOAST_SECONDS && done.failed === 0 && !e.isAborted) void startFx($, 'party')
     await update($, totals, x => ({
       turns: x.turns + 1,
       seconds: x.seconds + done.seconds,
@@ -1007,6 +1406,7 @@ export const register: Register = on => {
       const spent = use?.usd != null && before != null ? Math.max(0, use.usd - before) : 0
       await update($, lastUsd, () => use?.usd ?? before)
       await recordStats($, (await read($, project)) || 'claude', done, spent)
+      await refreshHeat($)
 
       // Auto-compact (13): once per crossing; compacting runs after this turn has closed.
       const pct = use?.percent ?? 0
@@ -1043,12 +1443,16 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const P = await palette($)
     const s = await read($, settings)
     if (e.props.hasSurvey || !s.band) {
       return next(e)
     }
     const { Box, Text, Button } = $.ui.resolve(e)
-    const name = await read($, project)
+    const t = $.ui.resolve(e)
+    const Raster = 'Raster' in t ? t.Raster : undefined
+    const Image = 'Image' in t ? t.Image : undefined
+    const name = (await read($, project)) || 'claude'
     const repo = await read($, git)
     const now = await read($, turn)
     const prev = await read($, last)
@@ -1057,82 +1461,212 @@ export const register: Register = on => {
     const countdown = await read($, timer)
     const pick = await read($, autoModel)
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
+    const effect = await read($, fx)
+    const hello = s.splash && (await read($, splash)) ? await read($, splashInfo) : null
+    const width = e.props.bodyColumns - (s.statecolor ? 4 : 0)
+    bandSite = e.requestId
+    fxWidth = Math.max(1, Math.min(width, 80))
+
+    const working = e.props.isWorking && now
+    const stateColor = working ? P.warn : prev && prev.failed > 0 ? P.err : P.ok
+
+    // Segments: [text, role color]; drawn plain or as powerline blocks.
+    type Segment = { text: string; color: string; meter?: { pct: number } }
+    const segments: Segment[] = []
+    if (repo)
+      segments.push({ text: `⎇ ${repo.branch}${repo.changed > 0 ? ` ±${repo.changed}` : ' ✓'}`, color: P.violet })
+    segments.push(
+      working
+        ? { text: `● đang chạy · ${now.tools} tool${now.failed > 0 ? ` · ${now.failed} lỗi` : ''}`, color: P.warn }
+        : prev
+          ? {
+              text: `${prev.failed > 0 ? '✗' : '✓'} ${prev.seconds}s · ${prev.tools} tool${prev.failed > 0 ? ` · ${prev.failed} lỗi` : ''}`,
+              color: prev.failed > 0 ? P.err : P.ok,
+            }
+          : { text: 'sẵn sàng', color: P.ok },
+    )
+    if (pct !== null) segments.push({ text: 'ctx', color: P.info, meter: { pct } })
+    for (const l of limits)
+      segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
+    if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink })
+    if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
+    if (working && pick) segments.push({ text: `⚡${pick}`, color: P.info })
+
+    const label = (seg: Segment) =>
+      seg.meter ? (s.meters ? `${seg.text} ` : `${seg.text} ${seg.meter.pct}%`) : seg.text
+    const meterRuns = (seg: Segment) =>
+      seg.meter && s.meters
+        ? [
+            ...meterCells(seg.meter.pct, 6, P).map(c => <Text color={c.color}>{c.ch}</Text>),
+            <Text color={seg.color}>{` ${seg.meter.pct}%`}</Text>,
+          ]
+        : []
+
+    const title = s.gradient ? (
+      gradientRuns(`◆ ${name}`, P.grad).map(r => (
+        <Text color={r.color} bold>
+          {r.ch}
+        </Text>
+      ))
+    ) : (
+      <Text color={P.accent} bold>
+        ◆ {name}
+      </Text>
+    )
+
+    // Powerline: each segment a colored block, joined by  in the next block's color.
+    const POWER = ''
+    const status = s.powerline ? (
+      <Box flexDirection="row" flexWrap="wrap">
+        <Text backgroundColor={P.accent} color={P.ink} bold>{` ◆ ${name} `}</Text>
+        {segments.map((seg, i) => [
+          <Text color={i === 0 ? P.accent : (segments[i - 1]?.color ?? P.accent)} backgroundColor={seg.color}>
+            {POWER}
+          </Text>,
+          <Text
+            backgroundColor={seg.color}
+            color={P.ink}
+          >{` ${label(seg)}${seg.meter && s.meters ? `${seg.meter.pct}%` : ''} `}</Text>,
+        ])}
+        <Text color={segments[segments.length - 1]?.color ?? P.accent}>{POWER}</Text>
+      </Box>
+    ) : (
+      <Box flexDirection="row" flexWrap="wrap" flexShrink={1}>
+        {title}
+        {segments.map(seg => [
+          <Text color={P.muted}>{'  │ '}</Text>,
+          <Text color={seg.color}>{label(seg)}</Text>,
+          ...meterRuns(seg),
+        ])}
+      </Box>
+    )
+
+    const buttons = (
+      <Box flexDirection="row" flexWrap="wrap" gap={1}>
+        <Button key="sessions" label="Session" hotkey="s" dimColor onPress={() => void openPeers($)} />
+        <Button key="dash" label="Bảng" hotkey="d" dimColor onPress={() => void openDash($)} />
+        <Button key="prompts" label="Prompt" hotkey="p" dimColor onPress={() => void openPrompts($)} />
+        <Button key="settings" label="Cài đặt" hotkey="c" dimColor onPress={() => void openSettings($)} />
+        <Button key="sel" label="Chọn" hotkey="v" dimColor onPress={() => void grabSelection($)} />
+        <Button key="hide" label="Ẩn" hotkey="h" dimColor onPress={() => setSetting($, 'band', false)} />
+      </Box>
+    )
+
+    const welcome = hello && (
+      <Box flexDirection="row" gap={2} marginBottom={1}>
+        {s.images && Image ? (
+          <Image
+            key="logo"
+            source={{ file: `${$.plugin.root}/assets/logo.png`, format: 'png' }}
+            columns={8}
+            rows={4}
+            alt="◆"
+          />
+        ) : null}
+        <Box flexDirection="column">
+          {LOGO.map(line => (
+            <Box flexDirection="row">
+              {gradientRuns(line, P.grad).map(r => (
+                <Text color={r.color} bold>
+                  {r.ch}
+                </Text>
+              ))}
+            </Box>
+          ))}
+        </Box>
+        <Box flexDirection="column" flexShrink={1}>
+          <Text color={P.accent} bold>
+            {hello.greeting}
+          </Text>
+          <Text color={P.muted} wrap="wrap">
+            {hello.last}
+          </Text>
+          <Text color={P.info} wrap="wrap">
+            {hello.tip}
+          </Text>
+        </Box>
+      </Box>
+    )
+
+    const strip =
+      effect && Raster ? (
+        <Raster key="fx" columns={fxWidth} rows={1} cells={fxFrame(effect, fxTick, fxWidth, P)} />
+      ) : null
 
     return (
-      <Box flexDirection="row" flexWrap="wrap" width={e.props.bodyColumns} justifyContent="space-between" columnGap={2}>
-        <Box flexDirection="row" flexShrink={1}>
-          <Text color="claude" bold>
-            ◆ {name || 'claude'}
-          </Text>
-          {repo && (
-            <Text color="subtle" wrap="truncate-end">
-              {'  ⎇ '}
-              {repo.branch}
-              {repo.changed > 0 ? ` ±${repo.changed}` : ' ✓'}
-            </Text>
-          )}
-          <Text color="subtle">{'  │ '}</Text>
-          {e.props.isWorking && now ? (
-            <Text color="warning" wrap="truncate-end">
-              ● đang chạy · {now.tools} tool{now.failed > 0 ? ` · ${now.failed} lỗi` : ''}
-            </Text>
-          ) : prev ? (
-            <Text color={prev.failed > 0 ? 'error' : 'success'} wrap="truncate-end">
-              {prev.failed > 0 ? '✗' : '✓'} {prev.seconds}s · {prev.tools} tool
-              {prev.failed > 0 ? ` · ${prev.failed} lỗi` : ''}
-            </Text>
-          ) : (
-            <Text color="subtle">sẵn sàng</Text>
-          )}
-          {pct !== null && (
-            <Text color={pct >= 80 ? 'error' : pct >= 60 ? 'warning' : 'subtle'}>
-              {'  │ ctx '}
-              {pct}%
-            </Text>
-          )}
-          {use?.usd != null && <Text color="subtle"> ${use.usd.toFixed(2)}</Text>}
-          {limits.map(l => (
-            <Text color={levelColor(l.percent)}>{`  ${LIMIT_LABEL[l.kind] ?? l.kind} ${l.percent}%`}</Text>
-          ))}
-          {countdown && <Text color="warning">{`  ⏱ ${countdown.left}m`}</Text>}
-          {e.props.isWorking && pick && <Text color="suggestion">{`  ⚡${pick}`}</Text>}
+      <Box
+        flexDirection="column"
+        width={e.props.bodyColumns}
+        {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
+      >
+        {welcome}
+        <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          {status}
+          {buttons}
         </Box>
-        <Box flexDirection="row" gap={1}>
-          <Button key="sessions" label="Session" hotkey="s" dimColor onPress={() => void openPeers($)} />
-          <Button key="dash" label="Bảng" hotkey="d" dimColor onPress={() => void openDash($)} />
-          <Button key="prompts" label="Prompt" hotkey="p" dimColor onPress={() => void openPrompts($)} />
-          <Button key="settings" label="Cài đặt" hotkey="c" dimColor onPress={() => void openSettings($)} />
-          <Button key="sel" label="Chọn" hotkey="v" dimColor onPress={() => void grabSelection($)} />
-          <Button key="hide" label="Ẩn" hotkey="h" dimColor onPress={() => setSetting($, 'band', false)} />
-        </Box>
+        {strip}
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: DASH }, async ($, e) => {
+    const P = await palette($)
+    const s = await read($, settings)
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, calls)
     const touched = await read($, files)
     const repo = await read($, git)
     const subs = await read($, agents)
     const turns = await read($, history)
-    const room = Math.max(3, (e.viewport?.rows ?? 24) - 14 - Math.min(touched.length, 8) - subs.length)
+    const counts = await read($, heat)
+    const now = await $.clock.now()
+    const room = Math.max(3, (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - subs.length)
+    const HEAT = [P.muted, ...[0.15, 0.5, 0.8, 1].map(t => colorAt(P.grad, t))]
+
+    const heading = (text: string) =>
+      s.gradient ? (
+        <Box flexDirection="row">
+          {gradientRuns(text, P.grad).map(r => (
+            <Text color={r.color} bold>
+              {r.ch}
+            </Text>
+          ))}
+        </Box>
+      ) : (
+        <Text color={P.accent} bold>
+          {text}
+        </Text>
+      )
+
+    // A hover card (36): hidden until its keyed row is hovered.
+    const card = (lines: string[], color: string) =>
+      s.hovercards ? (
+        <Box
+          position="absolute"
+          top={1}
+          left={2}
+          display="none"
+          hover={{ display: 'flex' }}
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={color}
+          paddingX={1}
+        >
+          {lines.map(l => (
+            <Text wrap="wrap">{l}</Text>
+          ))}
+        </Box>
+      ) : null
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns} gap={1}>
         {subs.length > 0 && (
           <Box flexDirection="column">
-            <Text color="claude" bold>
-              Subagent ({subs.length})
-            </Text>
+            {heading(`Subagent (${subs.length})`)}
             {subs.map(a => (
               <Text
                 color={
-                  a.status === 'running'
-                    ? 'warning'
-                    : a.status === 'failed' || a.status === 'killed'
-                      ? 'error'
-                      : 'subtle'
+                  a.status === 'running' ? P.warn : a.status === 'failed' || a.status === 'killed' ? P.err : P.muted
                 }
                 wrap="truncate-end"
               >
@@ -1143,45 +1677,79 @@ export const register: Register = on => {
           </Box>
         )}
         <Box flexDirection="column">
-          <Text color="claude" bold>
-            Git
-          </Text>
-          <Text color="subtle" wrap="truncate-end">
+          {heading('Git')}
+          <Text color={repo ? P.violet : P.muted} wrap="truncate-end">
             {repo ? `⎇ ${repo.branch} · ${repo.changed} file thay đổi` : 'không phải git repo'}
           </Text>
         </Box>
         {turns.length > 0 && (
           <Box flexDirection="column">
-            <Text color="claude" bold>
-              Tốc độ {turns.length} lượt gần đây
-            </Text>
-            <Text color="suggestion">
-              {spark(turns.map(t => t.seconds))}
-              <Text color="subtle"> max {Math.max(...turns.map(t => t.seconds))}s</Text>
-            </Text>
+            {heading(`Tốc độ ${turns.length} lượt gần đây`)}
+            <Box flexDirection="row">
+              {turns.map((t, i) => {
+                const max = Math.max(1, ...turns.map(x => x.seconds))
+                return (
+                  <Text color={t.failed > 0 ? P.err : colorAt(P.grad, i / Math.max(1, turns.length - 1))}>
+                    {BARS[Math.min(7, Math.floor((t.seconds / max) * 7))] ?? ''}
+                  </Text>
+                )
+              })}
+              <Text color={P.muted}> max {Math.max(...turns.map(t => t.seconds))}s</Text>
+            </Box>
           </Box>
         )}
+        {s.heatmap ? (
+          <Box flexDirection="column">
+            {heading(`Hoạt động ${HEAT_WEEKS} tuần`)}
+            {heatGrid(counts, now).map((row, weekday) => (
+              <Box flexDirection="row">
+                <Text color={P.muted}>{`${WEEKDAYS[weekday] ?? ''} `}</Text>
+                {row.map(level => (
+                  <Text color={level === null ? P.muted : (HEAT[level] ?? P.muted)}>
+                    {level === null ? '  ' : level === 0 ? '· ' : '■ '}
+                  </Text>
+                ))}
+              </Box>
+            ))}
+          </Box>
+        ) : null}
         <Box flexDirection="column">
-          <Text color="claude" bold>
-            File đã sửa ({touched.length}) · bấm để xem diff
-          </Text>
-          {touched.length === 0 && <Text color="subtle">chưa có</Text>}
-          {touched.slice(0, 8).map(f => (
-            <Button key={`diff-${f}`} label={`✎ ${baseName(f)}`} plain onPress={() => void showDiff($, f)} />
-          ))}
+          {heading(`File đã sửa (${touched.length}) · bấm để xem diff`)}
+          {touched.length === 0 && <Text color={P.muted}>chưa có</Text>}
+          {touched.slice(0, 8).map(f => {
+            const [tag, tagColor] = fileTag(f)
+            return (
+              <Box key={`file-${f}`} flexDirection="row" gap={1}>
+                {s.fileicons ? (
+                  <Text color={tagColor} bold>
+                    {tag.padEnd(4)}
+                  </Text>
+                ) : null}
+                <Button key={`diff-${f}`} label={baseName(f)} plain onPress={() => void showDiff($, f)} />
+                {card([f, 'bấm để xem diff'], tagColor)}
+              </Box>
+            )
+          })}
         </Box>
         <Box flexDirection="column">
-          <Text color="claude" bold>
-            Tool gần đây ({list.length})
-          </Text>
-          {list.length === 0 && <Text color="subtle">chưa có</Text>}
+          {heading(`Tool gần đây (${list.length})`)}
+          {list.length === 0 && <Text color={P.muted}>chưa có</Text>}
           {list
             .slice(-room)
             .reverse()
             .map(call => (
-              <Text color={COLOR[call.state]} bold={call.state === 'run'} wrap="wrap">
-                {`${ICON[call.state]} ${call.tool}  ${call.label}`}
-              </Text>
+              <Box key={`call-${call.id}`} flexDirection="column">
+                <Text color={P[STATE_ROLE[call.state]]} bold={call.state === 'run'} wrap="wrap">
+                  {`${ICON[call.state]} ${call.tool}  ${call.label}`}
+                </Text>
+                {card(
+                  [
+                    `${call.tool} · ${call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`,
+                    call.label,
+                  ],
+                  P[STATE_ROLE[call.state]],
+                )}
+              </Box>
             ))}
         </Box>
       </Box>
@@ -1189,24 +1757,26 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: DIFF_PANE }, async ($, e) => {
+    const P = await palette($)
     const { Box, Text, Code } = $.ui.resolve(e)
     const shown = await read($, diff)
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        {!shown && <Text color="subtle">Chọn một file trong /mods dash để xem diff.</Text>}
+        {!shown && <Text color={P.muted}>Chọn một file trong /mods dash để xem diff.</Text>}
         {shown && (
-          <Text color="subtle" wrap="truncate-start">
+          <Text color={P.muted} wrap="truncate-start">
             {shown.path}
           </Text>
         )}
-        {shown?.note && <Text color="warning">{shown.note}</Text>}
+        {shown?.note && <Text color={P.warn}>{shown.note}</Text>}
         {shown?.text && <Code source={shown.text} format="diff" path={shown.path} />}
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: PEERS_PANE }, async ($, e) => {
+    const P = await palette($)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const Input = 'Input' in t ? t.Input : undefined
@@ -1215,22 +1785,20 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color="subtle">
+        <Text color={P.muted}>
           {list.length} session · {busy} đang chạy · ctrl+x tab để gõ
         </Text>
-        {list.length === 0 && <Text color="subtle">không tìm thấy session nào</Text>}
+        {list.length === 0 && <Text color={P.muted}>không tìm thấy session nào</Text>}
         {list.map(peer => (
           <Box key={`peer-${peer.id}`} flexDirection="column" marginTop={1}>
             <Box flexDirection="row" justifyContent="space-between">
-              <Text color={peer.isSelf ? 'claude' : 'text'} bold={peer.isSelf} wrap="truncate-end">
+              <Text color={peer.isSelf ? P.accent : 'text'} bold={peer.isSelf} wrap="truncate-end">
                 {peer.isSelf ? '★ ' : '  '}
                 {peer.name}
               </Text>
-              <Text color={peer.status === 'busy' ? 'warning' : 'success'}>
-                {peer.status === 'busy' ? '● bận' : '○ rảnh'}
-              </Text>
+              <Text color={peer.status === 'busy' ? P.warn : P.ok}>{peer.status === 'busy' ? '● bận' : '○ rảnh'}</Text>
             </Box>
-            <Text color="subtle" wrap="truncate-start">
+            <Text color={P.muted} wrap="truncate-start">
               {'  '}
               {peer.cwd}
             </Text>
@@ -1267,6 +1835,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PROMPTS_PANE }, async ($, e) => {
+    const P = await palette($)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const Input = 'Input' in t ? t.Input : undefined
@@ -1274,9 +1843,9 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color="subtle">Bấm để gửi; đang bận thì xếp hàng chạy sau. ctrl+x tab để gõ.</Text>
+        <Text color={P.muted}>Bấm để gửi; đang bận thì xếp hàng chạy sau. ctrl+x tab để gõ.</Text>
         {list.length === 0 && (
-          <Text color="subtle">Chưa có prompt nào. Thêm ở ô dưới hoặc /mods save &lt;prompt&gt;.</Text>
+          <Text color={P.muted}>Chưa có prompt nào. Thêm ở ô dưới hoặc /mods save &lt;prompt&gt;.</Text>
         )}
         {list.map((text, i) => (
           <Box key={`prompt-${i}`} flexDirection="row" gap={1}>
@@ -1314,14 +1883,16 @@ export const register: Register = on => {
 
   // Settings tab: every feature one press away.
   on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
+    const P = await palette($)
     const { Box, Text, Button } = $.ui.resolve(e)
     const s = await read($, settings)
     const keys = Object.keys(SETTING_INFO) as (keyof Settings)[]
     const enabled = keys.filter(k => s[k]).length
+    const current = await read($, theme)
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color="subtle">
+        <Text color={P.muted}>
           {enabled}/{keys.length} đang bật · bấm để đổi · giữ qua các session
         </Text>
         <Box flexDirection="row" gap={1} marginBottom={1}>
@@ -1332,6 +1903,17 @@ export const register: Register = on => {
             onPress={() => void setSettings($, Object.fromEntries(keys.map(k => [k, true])))}
           />
           <Button key="defaults" label="Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
+        </Box>
+        <Box flexDirection="row" flexWrap="wrap" gap={1} marginBottom={1}>
+          <Text color={P.muted}>Theme:</Text>
+          {Object.keys(THEMES).map(name => (
+            <Button
+              key={`theme-${name}`}
+              label={name === current ? `● ${name}` : name}
+              dimColor={name !== current}
+              onPress={() => void setTheme($, name)}
+            />
+          ))}
         </Box>
         {keys.map(k => (
           <Button
@@ -1347,10 +1929,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: SELECTION_PANE }, async ($, e) => {
+    const P = await palette($)
     const { Box, Text, Button } = $.ui.resolve(e)
     const text = await read($, selection)
     if (!text) {
-      return <Text color="subtle">Bôi đen một đoạn trong transcript rồi bấm [Chọn] hoặc /mods sel.</Text>
+      return <Text color={P.muted}>Bôi đen một đoạn trong transcript rồi bấm [Chọn] hoặc /mods sel.</Text>
     }
     const ask = (verb: string) => () => {
       void $.prompt.submit({ text: `${verb}:\n\n${text}` })
@@ -1359,7 +1942,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color="subtle">{text.length > 400 ? `${text.slice(0, 399)}…` : text}</Text>
+        <Text color={P.muted}>{text.length > 400 ? `${text.slice(0, 399)}…` : text}</Text>
         <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={1}>
           <Button key="explain" label="Giải thích" hotkey="1" onPress={ask('Giải thích đoạn sau')} />
           <Button key="translate" label="Dịch Việt ⇄ Anh" hotkey="2" onPress={ask('Dịch đoạn sau (Việt ⇄ Anh)')} />
@@ -1376,18 +1959,19 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: FIND_PANE }, async ($, e) => {
+    const P = await palette($)
     const { Box, Text } = $.ui.resolve(e)
     const hits = await read($, found)
     const q = await read($, query)
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color="subtle">
+        <Text color={P.muted}>
           {hits.length} kết quả cho “{q}”
         </Text>
         {hits.map(h => (
           <Box flexDirection="column" marginTop={1}>
-            <Text color={h.role === 'user' ? 'claude' : 'suggestion'} bold>
+            <Text color={h.role === 'user' ? P.accent : P.info} bold>
               {h.role === 'user' ? '❯ Bạn' : '◆ Claude'}
             </Text>
             <Text>{h.snippet}</Text>
@@ -1399,6 +1983,7 @@ export const register: Register = on => {
 
   // Collapse (24): a long Bash output shows its head and a press to open it.
   on('ui.render', { component: 'ToolResult', props: { tool: 'Bash' } }, async ($, e, next) => {
+    const P = await palette($)
     if (!(await read($, settings)).collapse || e.props.isErrored) return next(e)
     const out = e.props.output as { stdout?: unknown } | undefined
     const lines = typeof out?.stdout === 'string' ? out.stdout.replace(/\n+$/, '').split('\n') : []
@@ -1423,44 +2008,75 @@ export const register: Register = on => {
     )
   })
 
-  // Badges (25): one coloured label per tool row.
+  // Badges (25): one coloured label per tool row; hover (36) shows the whole input.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    const { tool, isRunning, isErrored, isInterrupted } = e.props
+    const P = await palette($)
+    const s = await read($, settings)
+    const { tool, isRunning, isErrored, isInterrupted, tool_use_id } = e.props
     const isMcp = tool.startsWith('mcp__')
-    if (!(await read($, settings)).badges || !(tool in BADGE || isMcp)) return next(e)
+    if (!s.badges || !(tool in BADGE || isMcp)) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     const name = isMcp ? (tool.split('__').pop() ?? tool) : tool
-    const color = BADGE[tool] ?? 'merged'
+    const color = P[BADGE[tool] ?? 'pink']
     const [icon, iconColor] = isRunning
-      ? ['◌', 'warning']
+      ? ['◌', P.warn]
       : isInterrupted
-        ? ['⊘', 'subtle']
+        ? ['⊘', P.muted]
         : isErrored
-          ? ['✗', 'error']
-          : ['✓', 'success']
+          ? ['✗', P.err]
+          : ['✓', P.ok]
+    const fields = Object.entries((e.props.input ?? {}) as Record<string, unknown>)
+      .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+      .map(
+        ([k, v]) =>
+          `${k}: ${String(v)
+            .replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
+            .slice(0, 300)}`,
+      )
 
     return (
-      <Box flexDirection="row" gap={1}>
+      <Box key={`row-${tool_use_id}`} flexDirection="row" gap={1}>
         <Text color={iconColor}>{icon}</Text>
-        <Text backgroundColor={color} color="inverseText" bold>
+        <Text backgroundColor={color} color={P.ink} bold>
           {` ${name} `}
         </Text>
-        <Text color="subtle" wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}>
+        <Text color={P.muted} wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}>
           {summaryOf(e.props.input)}
         </Text>
+        {s.hovercards && fields.length > 0 ? (
+          <Box
+            position="absolute"
+            top={1}
+            left={4}
+            display="none"
+            hover={{ display: 'flex' }}
+            flexDirection="column"
+            borderStyle="round"
+            borderColor={color}
+            paddingX={1}
+          >
+            <Text color={color} bold>
+              {name}
+            </Text>
+            {fields.map(f => (
+              <Text wrap="wrap">{f}</Text>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     )
   })
 
   on('ui.render', { component: 'UserMessage', props: { origin: { kind: 'composer' } } }, async ($, e, next) => {
+    const P = await palette($)
     if (!(await read($, settings)).cards) {
       return next(e)
     }
     const { Box, Text } = $.ui.resolve(e)
 
     return (
-      <Box borderStyle="round" borderColor="claude" paddingX={1} flexDirection="row">
-        <Text color="claude" bold>
+      <Box borderStyle="round" borderColor={P.accent} paddingX={1} flexDirection="row">
+        <Text color={P.accent} bold>
           ❯{' '}
         </Text>
         <Text>{e.props.text}</Text>
@@ -1469,18 +2085,21 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    const P = await palette($)
     if (!(await read($, settings)).decor) return next(e)
     return next({ ...e, props: { ...e.props, word: SPINNER_WORDS[e.props.mode] } })
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const P = await palette($)
     if (!(await read($, settings)).decor || e.props.isDraft) return next(e)
     return next({ ...e, props: { ...e.props, tail: '· /mods ⚙' } })
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
+    const P = await palette($)
     if (!(await read($, settings)).decor) return next(e)
     const { Text } = $.ui.resolve(e)
-    return <Text color="subtle">✓ Xong sau {duration(e.props.durationMs)}</Text>
+    return <Text color={P.muted}>✓ Xong sau {duration(e.props.durationMs)}</Text>
   })
 }

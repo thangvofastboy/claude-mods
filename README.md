@@ -33,6 +33,16 @@ Màu sắc lấy theo theme Claude Code bạn đang dùng, nên hợp cả nền
 | 🔎 **Tìm trong hội thoại** | `/mods find <từ khóa>` mở panel kết quả, kèm đoạn văn xung quanh chỗ tìm thấy. |
 | ⏱ **Hẹn giờ** | `/mods timer 25`: đếm ngược trên dải trạng thái, hết giờ thì báo. |
 | 📦 **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào là mở ra đầy đủ. |
+| 🎨 **Theme** | `/mods theme catppuccin \| tokyonight \| dracula \| nord \| gruvbox \| auto` (hoặc chọn trong tab Cài đặt). `auto` theo theme của Claude Code; các theme còn lại dùng bảng màu nền tối chính thức của chúng. |
+| 🌈 **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo ở màn chào được tô chuyển màu theo theme. |
+| ▰ **Thanh đo** | Context và quota hiện dạng `ctx ▰▰▰▱▱▱ 42%`, màu chuyển dần từ xanh sang vàng rồi đỏ. |
+| 🟢 **Viền theo trạng thái** | Viền dải trạng thái xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước lỗi. |
+| ⚡ **Powerline** | *(mặc định tắt, cần font Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
+| ✨ **Hiệu ứng** | Vệt sáng chạy ngang khi Claude đang làm; pháo hoa khi test pass hoặc khi xong một việc dài không lỗi (chỉ trên terminal). |
+| 👋 **Màn chào** | Logo chuyển màu, lời chào theo giờ, tóm tắt lần làm việc trước và mẹo dùng. Tự ẩn khi bạn gửi prompt đầu tiên. |
+| 🗓️ **Heatmap** | Số lượt mỗi ngày trong 8 tuần, kiểu ô màu GitHub, trong bảng hoạt động. |
+| 🏷️ **Nhãn file & thẻ hover** | File đã sửa có nhãn màu theo loại (`TS`, `PY`, `MD`…). Rê chuột lên một dòng tool hoặc file sẽ hiện thẻ chi tiết: lệnh đầy đủ, thời gian chạy, đường dẫn (chế độ fullscreen). |
+| 🖼️ **Ảnh** | Logo PNG thật ở màn chào trên terminal hỗ trợ hiển thị ảnh (kitty, Ghostty); terminal khác hiện ký tự thay thế. |
 | 🏷️ **Badge tool** | Dòng của các tool một dòng (Bash, Read, Grep, Glob, Agent, Web, MCP) có nhãn màu kèm ✓ / ✗ / ◌. Edit, Write và TodoWrite vẫn giữ cách hiển thị gốc để không mất diff. |
 
 ## Cài đặt
@@ -51,7 +61,8 @@ Rồi gõ `/mods` để xem hướng dẫn.
 | Lệnh | Tác dụng |
 | --- | --- |
 | `/mods` | Hướng dẫn và trạng thái bật/tắt của từng tính năng |
-| `/mods settings` | Tab cài đặt: bật/tắt nhanh mọi tính năng |
+| `/mods settings` | Tab cài đặt: bật/tắt nhanh mọi tính năng, chọn theme |
+| `/mods theme <tên>` | Đổi bảng màu |
 | `/mods sel` | Hành động với đoạn đang bôi đen |
 | `/mods find <x>` | Tìm trong hội thoại này |
 | `/mods stats` | Thống kê 7 ngày |
@@ -64,9 +75,9 @@ Rồi gõ `/mods` để xem hướng dẫn.
 | `/mods save <prompt>` | Lưu một prompt nhanh |
 | `/mods version` | Phiên bản đang dùng và tag mới nhất |
 | `/mods update` | Cập nhật lên tag mới nhất, xong tự chạy `/reload-plugins` |
-| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` |
+| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` `gradient` `powerline` `meters` `statecolor` `fileicons` `anim` `confetti` `splash` `heatmap` `hovercards` `images` |
 
-Mặc định: `sound`, `voice`, `autocompact` và `automodel` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
+Mặc định: `sound`, `voice`, `autocompact`, `automodel` và `powerline` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
 
 **Mẹo:**
 - Muốn gõ vào ô nhập trong panel (nhắn tin, thêm prompt) thì bấm **ctrl+x tab** để chuyển vào panel, Esc để quay về prompt.
@@ -106,6 +117,7 @@ hooks/
 types/index.d.ts     kiểu dữ liệu của $.state
 tests/               test cho dải trạng thái, panel, cài đặt, thu gọn output, badge, bộ chặn lệnh, update
 sounds/done.wav      âm báo khi xong
+assets/logo.png      logo ở màn chào
 scripts/release.sh   đánh tag và phát hành
 ```
 
@@ -116,4 +128,6 @@ scripts/release.sh   đánh tag và phát hành
 - Bộ chặn lệnh là lớp bảo vệ **best-effort** bằng regex, không phải sandbox: nó bắt những cách viết phổ biến, nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đừng coi nó thay cho chế độ phân quyền của Claude Code.
 - `/mods stats` có thể thiếu vài lượt khi nhiều session cùng ghi một lúc.
 - Tự chọn model dùng thêm một lần gọi Haiku ở đầu mỗi lượt để phân loại câu hỏi, và có thể phân loại sai. Vì vậy mặc định tắt.
+- Các theme có tên được thiết kế cho nền tối; trên terminal nền sáng thì nên dùng `auto`.
+- Màu hex cần terminal hỗ trợ truecolor (tmux cần bật `Tc`/`RGB`). Hiệu ứng vẽ lại khoảng 12 khung hình/giây chỉ trong lúc chạy; tắt bằng `/mods anim` và `/mods confetti` nếu terminal bị nhấp nháy.
 - TL;DR gọi thêm Haiku nên tốn thêm một ít token. Tắt bằng `/mods tldr`.

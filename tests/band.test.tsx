@@ -36,7 +36,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`dashboard pane and prompt card draw on ${surface}`, async $ => {
+  test(`dashboard pane and prompt card draw on ${surface}`, async ($, on) => {
+    mock.clock(on)
     const pane = await $.ui.mount({
       plugin: 'terminal-polish',
       surface,
@@ -51,7 +52,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
         view: {},
       },
     })
-    expect(await pane.find({ type: 'Text', text: /Tool gần đây/ })).toBeDefined()
+    // Headings draw one run per character (gradient); the empty lists say so plainly.
+    expect(await pane.find({ type: 'Text', text: 'chưa có' })).toBeDefined()
     await pane.unmount()
 
     const card = await $.ui.mount({
