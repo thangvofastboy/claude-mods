@@ -186,21 +186,86 @@ const SPINNER_WORDS = {
 
 // Commands no confirmation should wave through. Narrow on purpose: a guard
 // that fires on everyday commands gets switched off within a day.
-const DANGER: readonly [RegExp, string][] = [
-  // rm -rf (or -r -f, --recursive --force) on /, ~, $HOME, with an optional /* and quotes.
-  [
-    /\brm\s+(?:-[a-zA-Z]*(?:rf|fr)[a-zA-Z]*|-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*\s+-[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+["']?(?:(?:\/|~|\$\{?HOME\}?)\/?\*?|\*)["']?(?=\s|;|&|\||$)/,
-    'xóa đệ quy /, ~ hoặc *',
-  ],
-  // --force, -f in any flag cluster (-fu), or a +main refspec; --force-with-lease passes.
-  [
-    /\bgit\b.*\bpush\b(?=.*(?:\s(?:--force(?!-with-lease)|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$)|\s\+(?:refs\/heads\/)?(?:main|master)\b))(?=.*\b(?:main|master)\b)/,
-    'force-push lên main/master',
-  ],
+//
+// rm and git push are read as shell segments and words, not matched with one
+// big regex: the work is linear in the command's length (no backtracking
+// blow-up on a crafted command), and flags in any order or place
+// (--no-preserve-root, --, -r -f) cannot walk a target past the check.
+const SIMPLE_DANGER: readonly [RegExp, string][] = [
   [/\bmkfs(\.\w+)?\s/, 'format ổ đĩa'],
-  [/\bdd\b.*\bof=\/dev\/(sd|nvme|hd|mmcblk)/, 'ghi đè thẳng lên ổ đĩa'],
+  [/\bdd\s[^;&|\n]*\bof=\/dev\/(sd|nvme|hd|mmcblk)/, 'ghi đè thẳng lên ổ đĩa'],
   [/\bchmod\s+-R\s+777\s+\/(\s|$)/, 'chmod 777 toàn hệ thống'],
 ]
+
+const SEGMENT = /\r\n|\r|\n|&&|\|\||[;&|]/
+// Quotes and the edges of $(…), (…) and `…` come off each word.
+const bare = (word: string) => word.replace(/^(?:\$\(|\(|`|["'])+/, '').replace(/(?:\)|`|["'])+$/, '')
+const shellSegments = (command: string) =>
+  command
+    .split(SEGMENT)
+    .map(seg => seg.trim().split(/\s+/).map(bare).filter(Boolean))
+    .filter(words => words.length > 0)
+
+const RM_TARGETS = new Set([
+  '/',
+  '/*',
+  '/.',
+  '~',
+  '~/',
+  '~/*',
+  '*',
+  '.*',
+  '$HOME',
+  '$HOME/',
+  '$HOME/*',
+  '${HOME}',
+  '${HOME}/',
+  '${HOME}/*',
+])
+
+function rmDanger(words: string[]) {
+  const at = words.findIndex(w => w === 'rm' || w.endsWith('/rm'))
+  if (at < 0) return false
+  let recursive = false
+  let endOfFlags = false
+  const targets: string[] = []
+  for (const w of words.slice(at + 1)) {
+    if (!endOfFlags && w === '--') endOfFlags = true
+    else if (!endOfFlags && w.startsWith('--')) recursive ||= w === '--recursive'
+    else if (!endOfFlags && /^-[a-zA-Z]+$/.test(w)) recursive ||= /[rR]/.test(w)
+    else targets.push(w)
+  }
+  return recursive && targets.some(t => RM_TARGETS.has(t))
+}
+
+// `git [global options] <sub> <args>`: -C and -c take a value, other leading flags are skipped.
+function gitCommand(words: string[]) {
+  const at = words.findIndex(w => w === 'git' || w.endsWith('/git'))
+  if (at < 0) return undefined
+  for (let i = at + 1; i < words.length; i++) {
+    const w = words[i] ?? ''
+    if (w === '-C' || w === '-c') i++
+    else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1) }
+  }
+  return undefined
+}
+
+// The branch a refspec writes to: `+main`, `HEAD:main`, `refs/heads/main` → main.
+const pushTarget = (ref: string) => (ref.replace(/^\+/, '').split(':').pop() ?? '').replace(/^refs\/heads\//, '')
+
+function forcePushDanger(words: string[]) {
+  const git = gitCommand(words)
+  if (git?.sub !== 'push') return false
+  let force = false
+  const refs: string[] = []
+  for (const w of git.args) {
+    if (w === '--force' || w.startsWith('--force=')) force = true
+    else if (/^-[a-zA-Z]+$/.test(w) && w.includes('f')) force = true
+    else if (!w.startsWith('-')) refs.push(w)
+  }
+  // refs[0] is the remote; a `+ref` forces that ref alone.
+  return refs.slice(1).some(r => ['main', 'master'].includes(pushTarget(r)) && (force || r.startsWith('+')))
+}
 const SECRET_FILE = /(^|\/)(\.env(\.[^/]*)?|id_rsa[^/]*|id_ed25519[^/]*|[^/]+\.pem)$/
 const SECRET_TEMPLATE = /\.env\.(example|sample|template)$/
 
@@ -248,20 +313,33 @@ function shortLabel(label: string) {
   const parts = label.split(' ⏎ ')
   const head = parts[0] ?? ''
   const more = parts.length - 1
-  if (more === 0 && head.length <= SHORT_LABEL) return label
-  return `${head.length > SHORT_LABEL ? head.slice(0, SHORT_LABEL - 1) : head}…${more ? ` (+${more} dòng)` : ''}`
+  if (more === 0 && head.length <= SHORT_LABEL) return { head: label, marker: '' }
+  return {
+    head: head.length > SHORT_LABEL ? head.slice(0, SHORT_LABEL - 1) : head,
+    marker: `…${more ? ` (+${more} dòng)` : ''}`,
+  }
 }
 
 // Rows a hover card takes at a width: its wrapped lines plus the border.
 const cardHeight = (lines: string[], width: number) =>
   lines.reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / Math.max(1, width - 4))), 0) + 2
 
-const commandLabel = (command: string) => command.trim().replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
+// Split, not one regex with \s* on both sides of the newline: linear on any input.
+const commandLabel = (command: string) =>
+  command
+    .split(/\r\n|\r|\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join(' ⏎ ')
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 function dangerOf(command: string) {
-  return DANGER.find(([pattern]) => pattern.test(command))?.[1]
+  for (const words of shellSegments(command)) {
+    if (rmDanger(words)) return 'xóa đệ quy /, ~ hoặc *'
+    if (forcePushDanger(words)) return 'force-push lên main/master'
+  }
+  return SIMPLE_DANGER.find(([pattern]) => pattern.test(command))?.[1]
 }
 
 function isSecretFile(path: string) {
@@ -1218,27 +1296,21 @@ const checkpointsText = (list: Checkpoint[]) =>
 // ---- branch lock (41)
 const PROTECTED_BRANCHES = ['main', 'master', 'production']
 
-// `git [global options] <sub>`: -C dir, -c k=v and --flags may sit before it.
-const gitSub = (sub: string) => new RegExp(`\\bgit(?:\\s+-[cC]\\s+\\S+|\\s+--?[\\w-]+(?:=\\S+)?)*\\s+${sub}\\b`)
-const GIT_COMMIT = gitSub('commit')
-const GIT_PUSH = gitSub('push')
-
 function branchLockReason(command: string, branch: string | undefined) {
   const onProtected = !!branch && PROTECTED_BRANCHES.includes(branch)
-  if (GIT_COMMIT.test(command) && onProtected) return `commit thẳng lên ${branch}`
-  if (GIT_PUSH.test(command)) {
-    const named = PROTECTED_BRANCHES.find(b =>
-      new RegExp(`(?:\\s|:|\\+|refs/heads/)${b}(?=\\s|;|&|\\||$)`).test(command),
-    )
-    if (named) return `push thẳng lên ${named}`
-    // A push naming no refspec after the remote pushes the current branch.
-    const args = command
-      .replace(/^[\s\S]*?\bpush\b/, '')
-      .split(/[;&|]/)[0]
-      ?.trim()
-      .split(/\s+/)
-      .filter(a => a && !a.startsWith('-'))
-    if (onProtected && (args?.length ?? 0) <= 1) return `push từ nhánh ${branch}`
+  for (const words of shellSegments(command)) {
+    const git = gitCommand(words)
+    if (git?.sub === 'commit' && onProtected) return `commit thẳng lên ${branch}`
+    if (git?.sub === 'push') {
+      const refs = git.args.filter(a => !a.startsWith('-'))
+      const named = refs
+        .slice(1)
+        .map(pushTarget)
+        .find(t => PROTECTED_BRANCHES.includes(t))
+      if (named) return `push thẳng lên ${named}`
+      // No refspec after the remote: the current branch is what gets pushed.
+      if (onProtected && refs.length <= 1) return `push từ nhánh ${branch}`
+    }
   }
   return undefined
 }
@@ -1737,14 +1809,28 @@ export const register: Register = on => {
     return ran
   })
 
-  // What only the person may do from /mods: switch features, run or set the check
-  // command, undo, commit, lift the budget. Another plugin's $.command.run cannot.
-  const PERSON_ONLY = new Set(['check', 'undo', 'commit', 'budget', 'theme', ...Object.keys(DEFAULTS)])
+  // From anyone but the person (another plugin's $.command.run), /mods only
+  // reads: nothing that changes a setting, the system prompt (rule), prompts
+  // (abbrev, save), files (undo, commit), runs a command (check) or sends the
+  // conversation elsewhere (handoff).
+  const READ_ONLY = new Set([
+    '',
+    'help',
+    'version',
+    'stats',
+    'sessions',
+    'dash',
+    'settings',
+    'find',
+    'context',
+    'checkpoints',
+    'rules',
+  ])
 
   on('command.run', { command: 'mods' }, async ($, e) => {
     const args = e.args.trim()
     const word = args.split(/\s+/)[0] ?? ''
-    if (PERSON_ONLY.has(word) && e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
+    if (!READ_ONLY.has(word) && e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
       return { text: `/mods ${word} chỉ chạy được khi bạn tự gõ.` }
     }
     switch (word) {
@@ -2489,8 +2575,14 @@ export const register: Register = on => {
                       wrap="truncate-end"
                       hover={s.hovercards ? { inverse: true } : undefined}
                     >
-                      {`${ICON[call.state]} ${call.tool}  ${short}`}
+                      {`${ICON[call.state]} ${call.tool}  ${short.head}`}
                     </Text>
+                    {/* Its own element, never shrunk: a narrow pane cuts the label, not this. */}
+                    {short.marker ? (
+                      <Box flexShrink={0}>
+                        <Text color={P.warn}>{short.marker}</Text>
+                      </Box>
+                    ) : null}
                     {
                       <Button
                         key={`call-open-${call.id}`}
@@ -2727,7 +2819,16 @@ export const register: Register = on => {
             key="copy"
             label="Copy sạch"
             hotkey="4"
-            onPress={() => void $.ui.copy({ text: text.replace(/[ \t]+$/gm, '').trim(), surface: e.surface })}
+            onPress={() =>
+              void $.ui.copy({
+                text: text
+                  .split('\n')
+                  .map(line => line.trimEnd())
+                  .join('\n')
+                  .trim(),
+                surface: e.surface,
+              })
+            }
           />
         </Box>
       </Box>
@@ -2999,12 +3100,7 @@ export const register: Register = on => {
     const badgeCardWidth = Math.max(20, (e.viewport?.columns ?? 80) - 8)
     const fields = Object.entries((e.props.input ?? {}) as Record<string, unknown>)
       .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-      .map(
-        ([k, v]) =>
-          `${k}: ${String(v)
-            .replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
-            .slice(0, 300)}`,
-      )
+      .map(([k, v]) => `${k}: ${commandLabel(String(v)).slice(0, 300)}`)
 
     return (
       <Box key={`row-${tool_use_id}`} flexDirection="row" gap={1}>
