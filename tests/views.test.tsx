@@ -104,9 +104,11 @@ test('"Bật hết" turns every feature on in one write', async ($, on) => {
     props: { title: 'Cài đặt', ...PANE_PROPS },
   })
   await ui.press({ key: 'all-on' })
-  for (const key of ['sound', 'voice', 'autocompact', 'automodel']) {
+  for (const key of ['sound', 'voice', 'autocompact', 'powerline']) {
     expect((await ui.find({ key: `set-${key}` }))?.text).toContain('● bật')
   }
+  // Experimental: never switched on in bulk.
+  expect((await ui.find({ key: 'set-automodel' }))?.text).toContain('○ tắt')
   await ui.unmount()
 })
 
@@ -189,4 +191,16 @@ test('/mods output draws in color: headings, commands, on/off dots', async $ => 
   expect(await ui.find({ type: 'Text', text: /^ {2}dash/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'dải trạng thái trên ô prompt' })).toBeDefined()
   await ui.unmount()
+})
+
+test('/mods theme navy switches to the navy palette and suggests its background', async ($, on) => {
+  mock.store(on)
+  const ran = await $.command.run({
+    command: 'mods',
+    args: 'theme navy',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+  expect(ran.text).toContain('Đã đổi theme: navy')
+  expect(ran.text).toContain('#0b1426')
 })
