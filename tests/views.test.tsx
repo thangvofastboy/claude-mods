@@ -157,12 +157,13 @@ test('recent tools show short, marked labels and open in full on press', async (
   })
   // Short, but never silently cut: … and the hidden line count are on the row.
   expect(await ui.find({ type: 'Text', text: /Bash {2}pnpm --filter .*… \(\+1 dòng\)/ })).toBeDefined()
-  // The opened line (indented) is not drawn yet; the hover card holds the full text by design.
-  expect(await ui.find({ type: 'Text', text: /^ {2}pnpm --filter .* ⏎ rm -rf build/ })).toBeUndefined()
+  // Details are drawn only once the row is opened.
+  expect(await ui.find({ type: 'Text', text: /pnpm --filter .* ⏎ rm -rf build/ })).toBeUndefined()
   const toggle = await ui.find({ type: 'Button', text: /▸/ })
   expect(toggle).toBeDefined()
   await ui.press({ key: toggle?.key ?? '' })
-  expect(await ui.find({ type: 'Text', text: /^ {2}pnpm --filter .* ⏎ rm -rf build/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /pnpm --filter .* ⏎ rm -rf build/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Bash · lỗi/ })).toBeDefined()
   await ui.unmount()
 })
 

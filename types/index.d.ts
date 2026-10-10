@@ -35,6 +35,7 @@ export type Settings = {
   autocheck: boolean
   compactplus: boolean
   todos: boolean
+  notices: boolean
 }
 export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number; edits: number }
@@ -54,6 +55,7 @@ export type CommitDraft = { message: string; files: number; note: string }
 export type CheckResult = { ok: boolean; command: string; output: string; at: number }
 export type Category = { name: string; tokens: number; color: string }
 export type Breakdown = { categories: Category[]; total: number; max: number }
+export type Notice = { id: number; icon: string; kind: 'ok' | 'err' | 'warn' | 'info' | 'pink'; text: string }
 export type SplashInfo = { greeting: string; last: string; tip: string }
 
 declare module 'claude-code' {
@@ -86,6 +88,7 @@ declare module 'claude-code' {
       expanded: string[]
       autoModel: string | null
       openCalls: string[]
+      notices: Notice[]
       theme: string
       fx: 'comet' | 'party' | null
       splash: boolean

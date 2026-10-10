@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-20%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-23%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-6-f5c2e7?style=for-the-badge)
 
@@ -60,13 +60,15 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. |
+| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một thẻ có màu và viền theo loại hiện vài giây trên dải trạng thái. |
+| 🖱️ | **Rê chuột đổi màu** | Rê chuột lên dòng tool thì dòng đổi màu; bấm mới mở chi tiết. |
 
 ### 📊 Bảng điều khiển
 
 | | Bảng | Có gì |
 | :-: | --- | --- |
 | 🗂️ | **Sessions** | Các session Claude đang chạy trên máy, bận/rảnh; nhắn tin sang session khác, copy lệnh resume. |
-| 📈 | **Hoạt động** | Subagent, git, biểu đồ tốc độ, heatmap 8 tuần, file đã sửa có nhãn màu theo loại (bấm để xem **diff**), các tool gần đây ở dạng gọn (bấm **▸** để xem đủ, rê chuột để xem thời gian chạy). |
+| 📈 | **Hoạt động** | Subagent, git, biểu đồ tốc độ, heatmap 8 tuần, file đã sửa có nhãn màu theo loại (bấm để xem **diff**), các tool gần đây ở dạng gọn: rê chuột thì dòng đổi màu, bấm **▸** để mở khung chi tiết (lệnh đầy đủ, trạng thái, thời gian chạy). |
 | ⚡ | **Prompt nhanh** | Lưu prompt hay dùng thành nút bấm, phím tắt `1`–`9`. |
 | ☐ | **TODO** | Tự gom `TODO`/`FIXME` Claude viết vào code và các mục `- [ ]` trong câu trả lời; bấm để đánh dấu xong. |
 | 📌 | **Ghi chú** | Ghi chú riêng từng dự án, có nút gửi cho Claude. |
@@ -80,7 +82,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 
 | | Tính năng | Mô tả |
 | :-: | --- | --- |
-| 🛑 | **Chặn lệnh nguy hiểm** | `rm -rf /` (hoặc `~`, `*`), force-push lên `main`/`master` (vẫn cho `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, sửa `.env`, `*.pem`, `id_rsa*`. |
+| 🛑 | **Chặn lệnh nguy hiểm** | `rm -rf` lên `/`, `~`, `$HOME` (cả dạng `~/*`, `"$HOME"`, `-r -f`), force-push lên `main`/`master` (cả `-fu`, `+main`; vẫn cho `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, sửa `.env`, `*.pem`, `id_rsa*`. Áp dụng cho cả tool **Bash** lẫn **Monitor**. |
 | 🔐 | **Quét secret** | Prompt có API key (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWT, private key hay `password=…` sẽ bị giữ lại. Gửi lại với **`>>`** ở đầu nếu chắc chắn. |
 | ↩️ | **Checkpoint & hoàn tác** | Bản cũ của file được lưu trước mỗi lần Claude sửa; `/mods undo` để khôi phục. |
 | 🌿 | **Khóa nhánh** | *(tùy chọn)* chặn commit/push thẳng lên `main`, `master`, `production`. |
@@ -91,7 +93,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 
 | | Tính năng | Mô tả |
 | :-: | --- | --- |
-| 💰 | **Ngân sách** | `/mods budget 5`: giới hạn $5/ngày. Đến 80% thì nhắc; vượt thì giữ prompt lại (gửi lại với `>>` để vẫn gửi). |
+| 💰 | **Ngân sách** | `/mods budget 5`: giới hạn $5/ngày. Đến 80% thì nhắc; vượt thì giữ prompt lại, kể cả prompt từ `/loop` hay từ panel (gửi lại với `>>` để vẫn gửi). Sang ngày mới thì tự mở lại. |
 | 💵 | **Thống kê** | `/mods stats`: lượt, thời gian, tool, chi phí theo ngày và theo dự án. |
 | 🗜️ | **Compact thông minh** | Nhắc `/compact` khi context từ 85% (hoặc tự compact); bản tóm tắt được dặn giữ file đã sửa, luật dự án và TODO đang mở. |
 | 📝 | **TL;DR** | Câu trả lời dài được Haiku tóm tắt 1–2 câu ngay bên dưới. |
@@ -202,7 +204,8 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `automodel` tự chọn model | ⬜ | | `anim` vệt sáng | ✅ |
 | `journal` nhật ký | ✅ | | `confetti` pháo hoa | ✅ |
 | `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
-| `badges` badge tool | ✅ | | `heatmap` · `hovercards` · `images` | ✅ |
+| `badges` badge tool | ✅ | | `heatmap` · `images` | ✅ |
+| `notices` thẻ thông báo màu | ✅ | | `hovercards` đổi màu khi rê chuột | ✅ |
 
 ---
 
@@ -244,7 +247,7 @@ hooks/
   hooks.json         khai báo module
   register.tsx       toàn bộ mod
 types/index.d.ts     kiểu dữ liệu của $.state
-tests/               dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn, notify_me, update
+tests/               dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, update
 assets/              banner, ảnh minh họa, logo
 sounds/done.wav      âm báo khi xong
 scripts/release.sh   đánh tag và phát hành

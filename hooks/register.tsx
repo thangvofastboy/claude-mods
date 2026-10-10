@@ -13,6 +13,7 @@ import type {
   Git,
   LastTurn,
   Limit,
+  Notice,
   Peer,
   Settings,
   SplashInfo,
@@ -85,6 +86,7 @@ const DEFAULTS: Settings = {
   autocheck: false,
   compactplus: true,
   todos: true,
+  notices: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -113,7 +115,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   confetti: 'pháo hoa khi test pass hoặc xong việc dài (chỉ terminal)',
   splash: 'màn chào khi mở session',
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
-  hovercards: 'thẻ chi tiết khi rê chuột (fullscreen)',
+  hovercards: 'đổi màu dòng khi rê chuột (fullscreen)',
   images: 'ảnh logo ở màn chào (kitty/Ghostty)',
   secrets: 'chặn prompt có API key, token, private key (gửi lại với >> ở đầu để vẫn gửi)',
   budget: 'giới hạn chi tiêu theo ngày đặt bằng /mods budget',
@@ -123,6 +125,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   autocheck: 'tự chạy lệnh kiểm tra (/mods check) sau lượt có sửa file',
   compactplus: 'giữ file đã sửa, luật và TODO khi /compact',
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
+  notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 
@@ -152,6 +155,7 @@ const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
+const notices = atom({ plugin: 'terminal-polish', key: 'notices' } as const, [])
 const openCalls = atom({ plugin: 'terminal-polish', key: 'openCalls' } as const, [])
 const theme = atom({ plugin: 'terminal-polish', key: 'theme' } as const, 'auto')
 const fx = atom({ plugin: 'terminal-polish', key: 'fx' } as const, null)
@@ -183,8 +187,16 @@ const SPINNER_WORDS = {
 // Commands no confirmation should wave through. Narrow on purpose: a guard
 // that fires on everyday commands gets switched off within a day.
 const DANGER: readonly [RegExp, string][] = [
-  [/\brm\s+-\w*(rf|fr)\w*\s+(\/|~\/?|\$HOME\/?|\*)(\s|;|&|$)/, 'xóa đệ quy /, ~ hoặc *'],
-  [/\bgit\s+push\b(?=.*\s(--force|-f)(\s|$))(?=.*\b(main|master)\b)/, 'force-push lên main/master'],
+  // rm -rf (or -r -f, --recursive --force) on /, ~, $HOME, with an optional /* and quotes.
+  [
+    /\brm\s+(?:-[a-zA-Z]*(?:rf|fr)[a-zA-Z]*|-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*\s+-[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+["']?(?:(?:\/|~|\$\{?HOME\}?)\/?\*?|\*)["']?(?=\s|;|&|\||$)/,
+    'xóa đệ quy /, ~ hoặc *',
+  ],
+  // --force, -f in any flag cluster (-fu), or a +main refspec; --force-with-lease passes.
+  [
+    /\bgit\b.*\bpush\b(?=.*(?:\s(?:--force(?!-with-lease)|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$)|\s\+(?:refs\/heads\/)?(?:main|master)\b))(?=.*\b(?:main|master)\b)/,
+    'force-push lên main/master',
+  ],
   [/\bmkfs(\.\w+)?\s/, 'format ổ đĩa'],
   [/\bdd\b.*\bof=\/dev\/(sd|nvme|hd|mmcblk)/, 'ghi đè thẳng lên ổ đĩa'],
   [/\bchmod\s+-R\s+777\s+\/(\s|$)/, 'chmod 777 toàn hệ thống'],
@@ -211,7 +223,7 @@ const SAFE_GIT = [
 
 const PROGRAM_KEYS =
   '^(filter\\..+\\.(clean|smudge|process)|diff\\.external|diff\\..+\\.(command|textconv)|merge\\..+\\.driver' +
-  '|gpg(\\..+)?\\.program|sequence\\.editor|uploadpack\\.packobjectshook|credential\\..*helper' +
+  '|gpg(\\..+)?\\.program|gpg\\.ssh\\.defaultkeycommand|sequence\\.editor|uploadpack\\.packobjectshook|credential\\..*helper' +
   '|core\\.(fsmonitor|sshcommand|pager|hookspath|editor|askpass|gitproxy|alternaterefscommand))$'
 
 // Reading config runs no program; `--includes` labels an included file's
@@ -293,14 +305,14 @@ async function refreshGit($: EngineInterface) {
       await update($, git, () => null)
       return
     }
-    const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+    const [head, status] = await Promise.all([
+      $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 }),
+      $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], { timeoutMs: 3000 }),
+    ])
     if (head.exitCode !== 0) {
       await update($, git, () => null)
       return
     }
-    const status = await $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], {
-      timeoutMs: 3000,
-    })
     const changed = status.stdout.split('\n').filter(Boolean).length
     const value: Git = { branch: head.stdout.trim(), changed }
     await update($, git, () => value)
@@ -661,7 +673,7 @@ async function armTimer($: EngineInterface, endsAt: number) {
     $.clock.after(Math.max(0, endsAt - now), () => {
       stopTimer()
       void update($, timer, () => null)
-      $.ui.toast('⏰ Hết giờ!')
+      void notice($, '⏰ Hết giờ!')
       void $.ui.notify('Hết giờ!', { title: 'terminal-polish' }).catch(() => undefined)
       void read($, settings).then(s => {
         if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
@@ -687,7 +699,7 @@ async function timerCommand($: EngineInterface, rest: string) {
 async function grabSelection($: EngineInterface) {
   const picked = await $.ui.selection()
   if (!picked?.text.trim()) {
-    $.ui.toast('Chưa bôi đen gì (chỉ có ở chế độ fullscreen)')
+    void notice($, 'Chưa bôi đen gì (chỉ có ở chế độ fullscreen)')
     return false
   }
   await update($, selection, () => picked.text)
@@ -715,8 +727,9 @@ async function writeJournal($: EngineInterface) {
   let before = '# Nhật ký Claude Code (terminal-polish)\n\n'
   try {
     before = await $.fs.read(path)
-  } catch {
-    // First entry.
+  } catch (error) {
+    // Only a missing file starts a new journal; any other failure must not overwrite it.
+    if (await $.fs.exists(path)) throw error
   }
   await $.fs.write(path, `${before}${before.endsWith('\n') ? '' : '\n'}${entry}`)
 }
@@ -956,29 +969,33 @@ let bandSite: string | null = null
 let fxWidth = 0
 let fxTick = 0
 let fxTimer: Timer | null = null
+let partyTimer: Timer | null = null
 const FX_MS = 80
 const PARTY_MS = 2600
 
 function stopFx() {
   fxTimer?.cancel()
   fxTimer = null
+  partyTimer?.cancel()
+  partyTimer = null
 }
 
 async function startFx($: EngineInterface, mode: 'comet' | 'party') {
-  const s = await read($, settings)
+  const [s, P] = await Promise.all([read($, settings), palette($)])
   if ((mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
+  // Stop and start with no await between, so two overlapping calls cannot both
+  // leave a timer running.
   stopFx()
   fxTick = 0
-  await update($, fx, () => mode)
-  const P = await palette($)
   fxTimer = $.clock.every(FX_MS, () => {
     fxTick += 1
     if (!bandSite || fxWidth < 1) return
     void $.ui.blit({ requestId: bandSite, key: 'fx', cells: fxFrame(mode, fxTick, fxWidth, P) }).catch(() => undefined)
   })
   if (mode === 'party') {
-    $.clock.after(PARTY_MS, () => void endFx($, 'party'))
+    partyTimer = $.clock.after(PARTY_MS, () => void endFx($, 'party'))
   }
+  await update($, fx, () => mode)
 }
 
 async function endFx($: EngineInterface, mode: 'comet' | 'party') {
@@ -1155,10 +1172,13 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
 const secretIn = (text: string) => SECRET_PATTERNS.find(([re]) => re.test(text))?.[1]
 
 // ---- checkpoints (40): the file as it was, before Claude's Edit or Write
+let checkpointSeq = 0
+
+// Returns the checkpoint's id, so a call that then fails can take it back.
 async function snapshot($: EngineInterface, path: string) {
   const dir = await read($, home)
-  if (!dir) return
-  const id = Date.now()
+  if (!dir) return undefined
+  const id = Date.now() * 1000 + (checkpointSeq++ % 1000)
   let copy: string | null = null
   if (await $.fs.exists(path)) {
     copy = `${dir}/.claude/mods-checkpoints/${await $.session.id()}/${id}-${baseName(path)}`
@@ -1166,6 +1186,7 @@ async function snapshot($: EngineInterface, path: string) {
   }
   const point: Checkpoint = { id, path, copy, at: await $.clock.now() }
   await update($, checkpoints, list => [...list, point].slice(-MAX_CHECKPOINTS))
+  return id
 }
 
 async function undoCommand($: EngineInterface, rest: string) {
@@ -1197,13 +1218,27 @@ const checkpointsText = (list: Checkpoint[]) =>
 // ---- branch lock (41)
 const PROTECTED_BRANCHES = ['main', 'master', 'production']
 
+// `git [global options] <sub>`: -C dir, -c k=v and --flags may sit before it.
+const gitSub = (sub: string) => new RegExp(`\\bgit(?:\\s+-[cC]\\s+\\S+|\\s+--?[\\w-]+(?:=\\S+)?)*\\s+${sub}\\b`)
+const GIT_COMMIT = gitSub('commit')
+const GIT_PUSH = gitSub('push')
+
 function branchLockReason(command: string, branch: string | undefined) {
   const onProtected = !!branch && PROTECTED_BRANCHES.includes(branch)
-  if (/\bgit\s+commit\b/.test(command) && onProtected) return `commit thẳng lên ${branch}`
-  if (/\bgit\s+push\b/.test(command)) {
-    const named = PROTECTED_BRANCHES.find(b => new RegExp(`(\\s|:)${b}(\\s|$)`).test(command))
+  if (GIT_COMMIT.test(command) && onProtected) return `commit thẳng lên ${branch}`
+  if (GIT_PUSH.test(command)) {
+    const named = PROTECTED_BRANCHES.find(b =>
+      new RegExp(`(?:\\s|:|\\+|refs/heads/)${b}(?=\\s|;|&|\\||$)`).test(command),
+    )
     if (named) return `push thẳng lên ${named}`
-    if (onProtected && !/\s(origin\s+)?[\w./-]+:/.test(command)) return `push từ nhánh ${branch}`
+    // A push naming no refspec after the remote pushes the current branch.
+    const args = command
+      .replace(/^[\s\S]*?\bpush\b/, '')
+      .split(/[;&|]/)[0]
+      ?.trim()
+      .split(/\s+/)
+      .filter(a => a && !a.startsWith('-'))
+    if (onProtected && (args?.length ?? 0) <= 1) return `push từ nhánh ${branch}`
   }
   return undefined
 }
@@ -1239,7 +1274,7 @@ async function runCheck($: EngineInterface) {
   const command = await read($, checkCommand)
   if (!command) return
   const base = (await read($, root)) || undefined
-  $.ui.toast(`⏳ Đang kiểm tra: ${command}`)
+  void notice($, `⏳ Đang kiểm tra: ${command}`)
   try {
     const run = await $.process.run(['sh', '-c', command], { cwd: base, timeoutMs: 180000 })
     const value: CheckResult = {
@@ -1249,7 +1284,7 @@ async function runCheck($: EngineInterface) {
       at: await $.clock.now(),
     }
     await update($, check, () => value)
-    $.ui.toast(value.ok ? `✓ Kiểm tra pass: ${command}` : `✗ Kiểm tra lỗi: ${command}`)
+    void notice($, value.ok ? `✓ Kiểm tra pass: ${command}` : `✗ Kiểm tra lỗi: ${command}`)
     if (value.ok) void startFx($, 'party')
   } catch (error) {
     const value: CheckResult = {
@@ -1339,7 +1374,7 @@ async function stageAll($: EngineInterface, base: string) {
   const secret = staged.stdout.split('\n').filter(f => f && isSecretFile(f))
   if (secret.length) {
     await $.process.run([...SAFE_GIT, '-C', base, 'reset', '-q', '--', ...secret], { timeoutMs: 5000 })
-    $.ui.toast(`🔐 Đã bỏ stage: ${secret.join(', ')}`)
+    void notice($, `🔐 Đã bỏ stage: ${secret.join(', ')}`)
   }
 }
 
@@ -1349,7 +1384,8 @@ async function commitNow($: EngineInterface) {
   const base = await read($, root)
   if (!(await gitIsSafe($, base))) return
   const run = await $.process.run([...SAFE_GIT, '-C', base, 'commit', '-m', draft.message], { timeoutMs: 30000 })
-  $.ui.toast(
+  void notice(
+    $,
     run.exitCode === 0
       ? `✓ Đã commit: ${draft.message.split('\n')[0]}`
       : `✗ Commit lỗi: ${run.stderr.trim().slice(0, 200)}`,
@@ -1378,7 +1414,8 @@ async function compactNotes($: EngineInterface) {
 function todosIn(text: string, file?: string): Todo[] {
   const found: Todo[] = []
   for (const line of text.split('\n')) {
-    const code = line.match(/\b(?:TODO|FIXME)\b[:\s-]*(.{3,160})/)
+    // TODO/FIXME only from code written to a file; an answer only gives "- [ ]" items.
+    const code = file ? line.match(/\b(?:TODO|FIXME)\b[:\s-]*(.{3,160})/) : null
     const box = line.match(/^\s*[-*] \[ \] (.{3,160})/)
     const text = (code?.[1] ?? box?.[1])?.replace(/\s*(\*\/|-->)\s*$/, '').trim()
     if (text) found.push({ text, done: false, ...(code && file ? { file } : {}) })
@@ -1515,6 +1552,41 @@ const openNotes = ($: EngineInterface) => $.ui.open({ id: NOTES_PANE, title: 'Gh
 const openCommit = ($: EngineInterface) => $.ui.open({ id: COMMIT_PANE, title: 'Commit' })
 const openContext = ($: EngineInterface) => $.ui.open({ id: CONTEXT_PANE, title: 'Context' })
 
+// ---- notices: the engine's toast (text only) with an icon, and a colored,
+// bordered card on the band for a few seconds.
+const NOTICE_MS = 6000
+const NOTICE_KINDS: readonly [RegExp, string, Notice['kind']][] = [
+  [/^(✓|✅|🎉)/u, '', 'ok'],
+  [/^(✗|❌)/u, '', 'err'],
+  [/^(🛡|🔐|⚠)/u, '', 'warn'],
+  [/^(💰)/u, '', 'pink'],
+  [/^(⏰|⏱|⏳)/u, '', 'warn'],
+  [/^(🔔|💡|📋|📨|↩)/u, '', 'info'],
+]
+let noticeSeq = 0
+
+async function notice($: EngineInterface, raw: string) {
+  const matched = NOTICE_KINDS.find(([re]) => re.test(raw))
+  const text = matched ? raw : /^Context/.test(raw) ? `🧠 ${raw}` : `💬 ${raw}`
+  const kind: Notice['kind'] = matched?.[2] ?? (/^Context/.test(raw) ? 'warn' : 'info')
+  $.ui.toast(text, { timeoutMs: NOTICE_MS })
+  if (!(await read($, settings)).notices) return
+  const [icon = '💬', ...rest] = [...text]
+  const item: Notice = { id: ++noticeSeq, icon, kind, text: rest.join('').trim() }
+  await update($, notices, l => [...l, item].slice(-3))
+  $.clock.after(NOTICE_MS, () => void update($, notices, l => l.filter(n => n.id !== item.id)))
+}
+
+// The guard's verdict on one shell command (Bash or Monitor). The branch is
+// read now, not from the band's state: a checkout earlier in the same turn counts.
+async function shellReason($: EngineInterface, command: string) {
+  const s = await read($, settings)
+  const danger = s.guard ? dangerOf(command) : undefined
+  if (danger || !s.branchlock || !/\bgit\b/.test(command)) return danger
+  const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+  return branchLockReason(command, head.exitCode === 0 ? head.stdout.trim() : (await read($, git))?.branch)
+}
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -1567,7 +1639,7 @@ export const register: Register = on => {
           'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
       })
     } catch {
-      $.ui.toast('terminal-polish: không đăng ký được /mods')
+      void notice($, 'terminal-polish: không đăng ký được /mods')
     }
     try {
       await loadSettings($)
@@ -1609,6 +1681,10 @@ export const register: Register = on => {
       await update($, lastUsd, () => use?.usd ?? null)
       const t = await read($, timer)
       if (t && t.endsAt > now) await armTimer($, t.endsAt)
+      else if (t) {
+        await update($, timer, () => null)
+        await notice($, '⏰ Hết giờ! (trong lúc nạp lại)')
+      }
     } catch {
       // Stats and the timer start fresh.
     }
@@ -1661,9 +1737,16 @@ export const register: Register = on => {
     return ran
   })
 
+  // What only the person may do from /mods: switch features, run or set the check
+  // command, undo, commit, lift the budget. Another plugin's $.command.run cannot.
+  const PERSON_ONLY = new Set(['check', 'undo', 'commit', 'budget', 'theme', ...Object.keys(DEFAULTS)])
+
   on('command.run', { command: 'mods' }, async ($, e) => {
     const args = e.args.trim()
     const word = args.split(/\s+/)[0] ?? ''
+    if (PERSON_ONLY.has(word) && e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
+      return { text: `/mods ${word} chỉ chạy được khi bạn tự gõ.` }
+    }
     switch (word) {
       case 'sessions':
         return placed(await openPeers($), 'Đã mở danh sách session.')
@@ -1790,29 +1873,40 @@ export const register: Register = on => {
   // Before a typed prompt leaves: secrets (39), budget (38), abbreviations (15).
   // A prompt starting with >> goes through both checks, the >> removed.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer') return next(e)
     const s = await read($, settings)
-    const isForced = e.text.startsWith(BYPASS)
+    const kind = e.origin.kind
+    const isTyped = kind === 'composer' || kind === 'bridge'
+    const isForced = isTyped && e.text.startsWith(BYPASS)
     let text = isForced ? e.text.slice(BYPASS.length).trimStart() : e.text
-    if (!isForced && s.secrets) {
-      const kind = secretIn(text)
-      if (kind) {
+    if (!isForced && isTyped && s.secrets) {
+      const found = secretIn(text)
+      if (found) {
         return {
-          drop: `🔐 Prompt có vẻ chứa ${kind}, chưa gửi. Xóa nó đi, hoặc gửi lại với "${BYPASS}" ở đầu nếu chắc chắn.`,
+          drop: `🔐 Prompt có vẻ chứa ${found}, chưa gửi. Xóa nó đi, hoặc gửi lại với "${BYPASS}" ở đầu nếu chắc chắn.`,
         }
       }
     }
-    if (!isForced && s.budget) {
-      const limit = await read($, budgetLimit)
-      const spent = await read($, spentToday)
+    // Every prompt that starts a turn spends: /loop, panes and remote ones too,
+    // a background task's notification excepted. Today's spend is re-read here,
+    // so a limit hit yesterday does not hold this morning's prompts.
+    if (!isForced && s.budget && kind !== 'task-notification') {
+      await refreshSpend($)
+      const [limit, spent] = await Promise.all([read($, budgetLimit), read($, spentToday)])
       if (limit > 0 && spent >= limit) {
         return {
           drop: `💰 Đã dùng $${spent.toFixed(2)} / $${limit.toFixed(2)} hôm nay. Gửi lại với "${BYPASS}" ở đầu để vẫn gửi, hoặc /mods budget off.`,
         }
       }
     }
-    if (s.abbrev) text = expandAbbrevs(text, await loadAbbrevs($))
+    if (s.abbrev && kind === 'composer') text = expandAbbrevs(text, await loadAbbrevs($))
     return next(text === e.text ? e : { ...e, text })
+  }).catch(($, e, next) => {
+    // A fault holds a typed prompt back (>> still sends it) rather than skip the checks.
+    if (next.called) return next(e)
+    const isTyped = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    if (!isTyped) return next(e)
+    if (e.text.startsWith(BYPASS)) return next({ ...e, text: e.text.slice(BYPASS.length).trimStart() })
+    return { drop: `terminal-polish: không kiểm tra được prompt nên đã giữ lại. Gửi lại với "${BYPASS}" ở đầu để gửi.` }
   })
 
   // Compact (45): tell the summary what it must keep.
@@ -1849,7 +1943,7 @@ export const register: Register = on => {
     }
     const raw = (e as unknown as { message?: unknown }).message
     const message = (typeof raw === 'string' ? raw : '').trim().slice(0, 300) || 'Claude cần bạn.'
-    $.ui.toast(`🔔 ${message}`)
+    void notice($, `🔔 ${message}`)
     const title = (await read($, project)) || 'Claude'
     const sent = await $.ui.notify(message, { title }).catch(() => undefined)
     // An MCP tool's result is its content: a string (or content blocks), never an object.
@@ -1887,24 +1981,30 @@ export const register: Register = on => {
   const guardFailed = { deny: 'terminal-polish: bộ chặn lỗi, đã chặn cho an toàn.' }
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const s = await read($, settings)
-    const reason =
-      (s.guard ? dangerOf(e.command) : undefined) ??
-      (s.branchlock ? branchLockReason(e.command, (await read($, git))?.branch) : undefined)
+    const reason = await shellReason($, e.command)
     if (!reason) return next(e)
-    $.ui.toast(`🛡 Đã chặn: ${reason}`)
+    await notice($, `🛡 Đã chặn: ${reason}`)
+    return guard(reason)
+  }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
+
+  // Monitor runs a shell command too: the same rules, or it is a way around them.
+  on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
+    const raw = (e as unknown as { command?: unknown }).command
+    const reason = await shellReason($, typeof raw === 'string' ? raw : '')
+    if (!reason) return next(e)
+    await notice($, `🛡 Đã chặn: ${reason}`)
     return guard(reason)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    $.ui.toast(`🛡 Đã chặn sửa ${baseName(e.file_path)}`)
+    void notice($, `🛡 Đã chặn sửa ${baseName(e.file_path)}`)
     return guard(`sửa file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    $.ui.toast(`🛡 Đã chặn ghi ${baseName(e.file_path)}`)
+    void notice($, `🛡 Đã chặn ghi ${baseName(e.file_path)}`)
     return guard(`ghi file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
@@ -1915,11 +2015,12 @@ export const register: Register = on => {
     const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
     const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
     let began = 0
+    let pointId: number | undefined
     try {
       began = await $.clock.now()
       await update($, calls, list => [...list, call].slice(-100))
       await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
-      if (path && e.tool !== 'Read' && (await read($, settings)).checkpoints) await snapshot($, path)
+      if (path && e.tool !== 'Read' && (await read($, settings)).checkpoints) pointId = await snapshot($, path)
     } catch {
       // The row is only display.
     }
@@ -1929,8 +2030,10 @@ export const register: Register = on => {
     try {
       const elapsed = began ? (await $.clock.now()) - began : undefined
       const isFailed = ran.deny !== undefined || ran.isError === true
+      // A denied or failed edit changed nothing: its checkpoint would undo nothing.
+      if (isFailed && pointId !== undefined) await update($, checkpoints, l => l.filter(c => c.id !== pointId))
       if (!isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
-        $.ui.toast('🎉 Test pass!')
+        void notice($, '🎉 Test pass!')
         void startFx($, 'party')
       }
       await update($, calls, list =>
@@ -1965,11 +2068,7 @@ export const register: Register = on => {
     const t = await read($, turn)
     const done: LastTurn = { seconds: Math.round(e.durationMs / 1000), tools: t?.tools ?? 0, failed: t?.failed ?? 0 }
     try {
-      if (s.todos && e.reason === 'answer')
-        await addTodos(
-          $,
-          todosIn(e.answer).filter(x => !x.file),
-        )
+      if (s.todos && e.reason === 'answer') await addTodos($, todosIn(e.answer))
       if (s.autocheck && (t?.edits ?? 0) > 0) void runCheck($)
     } catch {
       // Extras never hold the turn up.
@@ -1987,15 +2086,14 @@ export const register: Register = on => {
     }))
 
     const summary = `Xong sau ${duration(e.durationMs)} · ${done.tools} tool${done.failed ? ` · ${done.failed} lỗi` : ''}`
-    if (done.seconds >= TOAST_SECONDS) $.ui.toast(`✓ ${summary}`)
+    if (done.seconds >= TOAST_SECONDS) void notice($, `✓ ${summary}`)
     if (done.seconds >= NOTIFY_SECONDS && !e.isAborted) {
       const title = (await read($, project)) || 'Claude'
       if (s.notify) void $.ui.notify(summary, { title }).catch(() => undefined)
       if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
       if (s.voice) void $.audio.speak('Claude đã xong').catch(() => undefined)
     }
-    await refreshGit($)
-    await refreshUsage($)
+    await Promise.all([refreshGit($), refreshUsage($)])
     try {
       const use = await read($, usage)
       const before = await read($, lastUsd)
@@ -2008,7 +2106,8 @@ export const register: Register = on => {
       const day = localDay(await $.clock.now())
       if (s.budget && limit > 0 && spentNow >= limit * 0.8 && (await read($, budgetWarned)) !== day) {
         await update($, budgetWarned, () => day)
-        $.ui.toast(
+        void notice(
+          $,
           `💰 Đã dùng ${Math.round((spentNow / limit) * 100)}% ngân sách hôm nay ($${spentNow.toFixed(2)} / $${limit.toFixed(2)})`,
         )
       }
@@ -2020,10 +2119,10 @@ export const register: Register = on => {
       } else if (!(await read($, ctxWarned))) {
         await update($, ctxWarned, () => true)
         if (s.autocompact) {
-          $.ui.toast(`Context ${pct}%: đang tự /compact…`)
+          void notice($, `Context ${pct}%: đang tự /compact…`)
           $.clock.after(500, () => void $.session.compact({}).catch(() => undefined))
         } else {
-          $.ui.toast(`Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
+          void notice($, `Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
         }
       }
     } catch {
@@ -2089,6 +2188,7 @@ export const register: Register = on => {
       read($, check),
       read($, todos),
     ])
+    const cards = s.notices ? await read($, notices) : []
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
@@ -2239,6 +2339,24 @@ export const register: Register = on => {
         width={e.props.bodyColumns}
         {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
       >
+        {cards.map(n => {
+          const color = P[n.kind]
+          return (
+            <Box
+              key={`notice-${n.id}`}
+              flexDirection="row"
+              gap={1}
+              borderStyle="round"
+              borderColor={color}
+              paddingX={1}
+            >
+              <Text>{n.icon}</Text>
+              <Text color={color} bold wrap="wrap">
+                {n.text}
+              </Text>
+            </Box>
+          )
+        })}
         {welcome}
         <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
           {status}
@@ -2280,30 +2398,6 @@ export const register: Register = on => {
       )
 
     // A hover card (36): hidden until its keyed row is hovered.
-    // Opened above its row (rows above are painted first, so the card covers
-    // them) on a solid background, as wide as the pane allows.
-    const cardWidth = Math.max(20, e.props.bodyColumns - 4)
-    const card = (lines: string[], color: string) =>
-      s.hovercards ? (
-        <Box
-          position="absolute"
-          top={-cardHeight(lines, cardWidth)}
-          left={2}
-          width={cardWidth}
-          display="none"
-          hover={{ display: 'flex' }}
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={color}
-          backgroundColor={P.ink}
-          paddingX={1}
-        >
-          {lines.map(l => (
-            <Text wrap="wrap">{l}</Text>
-          ))}
-        </Box>
-      ) : null
-
     return (
       <Box flexDirection="column" width={e.props.bodyColumns} gap={1}>
         {subs.length > 0 && (
@@ -2372,7 +2466,6 @@ export const register: Register = on => {
                   </Text>
                 ) : null}
                 <Button key={`diff-${f}`} label={baseName(f)} plain onPress={() => void showDiff($, f)} />
-                {card([f, 'bấm để xem diff'], tagColor)}
               </Box>
             )
           })}
@@ -2386,14 +2479,19 @@ export const register: Register = on => {
             .map(call => {
               const isOpen = opened.includes(call.id)
               const short = shortLabel(call.label)
-              const canOpen = short !== call.label
+              const status = call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'
               return (
                 <Box key={`call-${call.id}`} flexDirection="column">
                   <Box flexDirection="row" gap={1}>
-                    <Text color={P[STATE_ROLE[call.state]]} bold={call.state === 'run'} wrap="truncate-end">
-                      {`${ICON[call.state]} ${call.tool}  ${isOpen ? '' : short}`}
+                    <Text
+                      color={P[STATE_ROLE[call.state]]}
+                      bold={call.state === 'run'}
+                      wrap="truncate-end"
+                      hover={s.hovercards ? { inverse: true } : undefined}
+                    >
+                      {`${ICON[call.state]} ${call.tool}  ${short}`}
                     </Text>
-                    {canOpen && (
+                    {
                       <Button
                         key={`call-open-${call.id}`}
                         label={isOpen ? '▾' : '▸'}
@@ -2405,19 +2503,20 @@ export const register: Register = on => {
                           )
                         }
                       />
-                    )}
+                    }
                   </Box>
                   {isOpen && (
-                    <Text color={P.muted} wrap="wrap">
-                      {`  ${call.label}${call.ms != null ? `  · ${(call.ms / 1000).toFixed(1)}s` : ''}`}
-                    </Text>
-                  )}
-                  {card(
-                    [
-                      `${call.tool} · ${call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`,
-                      call.label,
-                    ],
-                    P[STATE_ROLE[call.state]],
+                    <Box
+                      flexDirection="column"
+                      paddingLeft={2}
+                      borderStyle="round"
+                      borderColor={P[STATE_ROLE[call.state]]}
+                    >
+                      <Text color={P[STATE_ROLE[call.state]]} bold>
+                        {`${call.tool} · ${status}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`}
+                      </Text>
+                      <Text wrap="wrap">{call.label || '(không có tham số)'}</Text>
+                    </Box>
                   )}
                 </Box>
               )
@@ -2484,10 +2583,14 @@ export const register: Register = on => {
                       if (!text.trim()) return
                       void $.session
                         .send({ to: { sessionId: peer.id }, text })
-                        .then(r =>
-                          $.ui.toast(r.isDelivered ? `✓ Đã gửi tới ${peer.name}` : `✗ Không gửi được: ${r.reason}`),
+                        .then(
+                          r =>
+                            void notice(
+                              $,
+                              r.isDelivered ? `✓ Đã gửi tới ${peer.name}` : `✗ Không gửi được: ${r.reason}`,
+                            ),
                         )
-                        .catch(() => $.ui.toast(`✗ Không gửi được tới ${peer.name}`))
+                        .catch(() => void notice($, `✗ Không gửi được tới ${peer.name}`))
                     }}
                   />
                 )}
@@ -2495,7 +2598,9 @@ export const register: Register = on => {
                   key={`resume-${peer.id}`}
                   label="Copy lệnh resume"
                   dimColor
-                  onPress={() => void $.ui.copy({ text: `cd ${peer.cwd} && claude --resume ${peer.id}` })}
+                  onPress={() =>
+                    void $.ui.copy({ text: `cd '${peer.cwd.replace(/'/g, `'\\''`)}' && claude --resume ${peer.id}` })
+                  }
                 />
               </Box>
             )}
@@ -2526,7 +2631,7 @@ export const register: Register = on => {
               hotkey={i < 9 ? String(i + 1) : undefined}
               onPress={() => {
                 void $.prompt.submit({ text })
-                $.ui.toast('Đã xếp hàng prompt')
+                void notice($, 'Đã xếp hàng prompt')
               }}
             />
             <Button
@@ -2608,7 +2713,7 @@ export const register: Register = on => {
     }
     const ask = (verb: string) => () => {
       void $.prompt.submit({ text: `${verb}:\n\n${text}` })
-      $.ui.toast('Đã xếp hàng prompt')
+      void notice($, 'Đã xếp hàng prompt')
     }
 
     return (
@@ -2735,7 +2840,7 @@ export const register: Register = on => {
               label="Gửi ghi chú cho Claude"
               onPress={() => {
                 void $.prompt.submit({ text: `Ghi chú của tôi cho dự án này:\n${list.map(n => `- ${n}`).join('\n')}` })
-                $.ui.toast('Đã xếp hàng prompt')
+                void notice($, 'Đã xếp hàng prompt')
               }}
             />
           </Box>
@@ -2907,31 +3012,13 @@ export const register: Register = on => {
         <Text backgroundColor={color} color={P.ink} bold>
           {` ${name} `}
         </Text>
-        <Text color={P.muted} wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}>
+        <Text
+          color={P.muted}
+          wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}
+          hover={s.hovercards ? { color: color, bold: true } : undefined}
+        >
           {summaryOf(e.props.input)}
         </Text>
-        {s.hovercards && fields.length > 0 ? (
-          <Box
-            position="absolute"
-            top={-cardHeight([name, ...fields], badgeCardWidth)}
-            left={4}
-            width={badgeCardWidth}
-            display="none"
-            hover={{ display: 'flex' }}
-            flexDirection="column"
-            borderStyle="round"
-            borderColor={color}
-            backgroundColor={P.ink}
-            paddingX={1}
-          >
-            <Text color={color} bold>
-              {name}
-            </Text>
-            {fields.map(f => (
-              <Text wrap="wrap">{f}</Text>
-            ))}
-          </Box>
-        ) : null}
       </Box>
     )
   })
@@ -3033,13 +3120,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const P = await palette($)
     if (!(await read($, settings)).decor) return next(e)
     return next({ ...e, props: { ...e.props, word: SPINNER_WORDS[e.props.mode] } })
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const P = await palette($)
     if (!(await read($, settings)).decor || e.props.isDraft) return next(e)
     return next({ ...e, props: { ...e.props, tail: '· /mods ⚙' } })
   })
