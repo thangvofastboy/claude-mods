@@ -78,7 +78,8 @@ const SECRET_TEMPLATE = /\.env\.(example|sample|template)$/
 // clean/smudge, fsmonitor, an external diff, a textconv, a pager). The mod runs
 // git in whatever repo is open, so every call turns off what `-c` can, and
 // git is not run at all where the repo's own config names any program
-// (gitIsSafe); the person's global and system config are trusted.
+// (gitIsSafe); the person's global and system config are trusted. Submodules,
+// whose config lives apart under .git/modules, are never entered.
 const SAFE_GIT = [
   'git',
   '-c',
@@ -91,7 +92,9 @@ const SAFE_GIT = [
 ] as const
 
 const PROGRAM_KEYS =
-  '^(filter\\..+\\.(clean|smudge|process)|diff\\..+\\.(command|textconv)|merge\\..+\\.driver|core\\.(fsmonitor|sshcommand|pager|hookspath|editor|askpass|gitproxy)|credential\\..*helper)$'
+  '^(filter\\..+\\.(clean|smudge|process)|diff\\.external|diff\\..+\\.(command|textconv)|merge\\..+\\.driver' +
+  '|gpg(\\..+)?\\.program|sequence\\.editor|uploadpack\\.packobjectshook|credential\\..*helper' +
+  '|core\\.(fsmonitor|sshcommand|pager|hookspath|editor|askpass|gitproxy|alternaterefscommand))$'
 
 // Reading config runs no program; `--includes` labels an included file's
 // entries with the scope of the file that included it.
@@ -160,7 +163,9 @@ async function refreshGit($: EngineInterface) {
       await update($, git, () => null)
       return
     }
-    const status = await $.process.run([...SAFE_GIT, 'status', '--porcelain'], { timeoutMs: 3000 })
+    const status = await $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], {
+      timeoutMs: 3000,
+    })
     const changed = status.stdout.split('\n').filter(Boolean).length
     const value: Git = { branch: head.stdout.trim(), changed }
     await update($, git, () => value)
@@ -234,7 +239,7 @@ async function showDiff($: EngineInterface, path: string) {
       return
     }
     const run = await $.process.run(
-      [...SAFE_GIT, '-C', dir, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', path],
+      [...SAFE_GIT, '-C', dir, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', 'HEAD', '--', path],
       { timeoutMs: 5000 },
     )
     if (run.exitCode !== 0) {
