@@ -1,0 +1,8 @@
+{
+  "name": "terminal-polish",
+  "version": "0.1.0",
+  "author": { "name": "thangvofastboy" },
+  "description": "Status band, sessions sidebar, activity dashboard, prompt cards, command guard and turn notifications for Claude Code",
+  "repository": "https://github.com/thangvofastboy/claude-mods",
+  "types": "./types/index.d.ts"
+}

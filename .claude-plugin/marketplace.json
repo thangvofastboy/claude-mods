@@ -1,0 +1,13 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "thangvofastboy" },
+  "description": "Mods that polish Claude Code's terminal interface",
+  "plugins": [
+    {
+      "name": "terminal-polish",
+      "source": { "source": "github", "repo": "thangvofastboy/claude-mods", "ref": "v0.1.0" },
+      "version": "0.1.0",
+      "description": "/mods: status band, sessions sidebar, activity dashboard, quick prompts, command guard, TL;DR and notifications"
+    }
+  ]
+}

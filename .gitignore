@@ -1,0 +1,10 @@
+# Written by Claude Code each time it loads the mod; regenerated, never edited
+.claude-plugin/types/
+tsconfig.json
+
+node_modules/
+.DS_Store
+
+# local AI-tooling state (personal, not part of the mod)
+.claude/
+.remember/
