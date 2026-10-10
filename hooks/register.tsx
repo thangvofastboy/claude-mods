@@ -128,6 +128,8 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
+// Left out of "Bật hết": turned on one at a time, knowingly.
+const EXPERIMENTAL = new Set<keyof Settings>(['automodel'])
 
 const settings = atom({ plugin: 'terminal-polish', key: 'settings' } as const, DEFAULTS)
 const project = atom({ plugin: 'terminal-polish', key: 'project' } as const, '')
@@ -878,6 +880,8 @@ type Palette = {
   ink: string
   grad: readonly string[]
   meter: readonly [string, string, string]
+  // The terminal background the theme was drawn for; the mod cannot set it, it only suggests it.
+  bg?: string
 }
 
 const AUTO: Palette = {
@@ -910,6 +914,7 @@ const THEMES: Record<string, Palette> = {
     ink: '#1e1e2e',
     grad: ['#f5c2e7', '#cba6f7', '#89b4fa', '#94e2d5'],
     meter: ['#a6e3a1', '#f9e2af', '#f38ba8'],
+    bg: '#1e1e2e',
   },
   tokyonight: {
     accent: '#7aa2f7',
@@ -924,6 +929,7 @@ const THEMES: Record<string, Palette> = {
     ink: '#1a1b26',
     grad: ['#bb9af7', '#7aa2f7', '#7dcfff', '#9ece6a'],
     meter: ['#9ece6a', '#e0af68', '#f7768e'],
+    bg: '#1a1b26',
   },
   dracula: {
     accent: '#bd93f9',
@@ -938,6 +944,7 @@ const THEMES: Record<string, Palette> = {
     ink: '#282a36',
     grad: ['#ff79c6', '#bd93f9', '#8be9fd', '#50fa7b'],
     meter: ['#50fa7b', '#f1fa8c', '#ff5555'],
+    bg: '#282a36',
   },
   nord: {
     accent: '#88c0d0',
@@ -952,6 +959,7 @@ const THEMES: Record<string, Palette> = {
     ink: '#2e3440',
     grad: ['#8fbcbb', '#88c0d0', '#81a1c1', '#b48ead'],
     meter: ['#a3be8c', '#ebcb8b', '#bf616a'],
+    bg: '#2e3440',
   },
   gruvbox: {
     accent: '#fe8019',
@@ -966,6 +974,83 @@ const THEMES: Record<string, Palette> = {
     ink: '#282828',
     grad: ['#fb4934', '#fe8019', '#fabd2f', '#b8bb26'],
     meter: ['#b8bb26', '#fabd2f', '#fb4934'],
+    bg: '#282828',
+  },
+  // ---- navy blue dark family
+  navy: {
+    accent: '#5b8def',
+    ok: '#4ade80',
+    warn: '#fbbf24',
+    err: '#f87171',
+    info: '#60a5fa',
+    muted: '#64748b',
+    violet: '#818cf8',
+    cyan: '#22d3ee',
+    pink: '#f472b6',
+    ink: '#0b1426',
+    grad: ['#4f86ee', '#5b8def', '#7fb0ff', '#a5d8ff'],
+    meter: ['#4ade80', '#fbbf24', '#f87171'],
+    bg: '#0b1426',
+  },
+  midnight: {
+    accent: '#e2b714',
+    ok: '#7ec699',
+    warn: '#f0a35e',
+    err: '#ef6b73',
+    info: '#7aa2f7',
+    muted: '#5c6a8a',
+    violet: '#9d8cff',
+    cyan: '#5ccfe6',
+    pink: '#f29fbf',
+    ink: '#0d1b2a',
+    grad: ['#e2b714', '#f0c75e', '#9fb8ff', '#6b8cff'],
+    meter: ['#7ec699', '#f0a35e', '#ef6b73'],
+    bg: '#0d1b2a',
+  },
+  abyss: {
+    accent: '#2dd4bf',
+    ok: '#34d399',
+    warn: '#fcd34d',
+    err: '#fb7185',
+    info: '#38bdf8',
+    muted: '#4b6584',
+    violet: '#a78bfa',
+    cyan: '#67e8f9',
+    pink: '#f9a8d4',
+    ink: '#06142b',
+    grad: ['#0ea5e9', '#14b8a6', '#2dd4bf', '#99f6e4'],
+    meter: ['#34d399', '#fcd34d', '#fb7185'],
+    bg: '#06142b',
+  },
+  nightowl: {
+    accent: '#82aaff',
+    ok: '#addb67',
+    warn: '#ecc48d',
+    err: '#ef5350',
+    info: '#7fdbca',
+    muted: '#637777',
+    violet: '#c792ea',
+    cyan: '#21c7a8',
+    pink: '#ff5874',
+    ink: '#011627',
+    grad: ['#c792ea', '#82aaff', '#7fdbca', '#addb67'],
+    meter: ['#addb67', '#ecc48d', '#ef5350'],
+    bg: '#011627',
+  },
+  cobalt: {
+    accent: '#ffc600',
+    ok: '#3ad900',
+    warn: '#ff9d00',
+    err: '#ff7aa0',
+    info: '#3ca0ff',
+    muted: '#6b88a6',
+    violet: '#fb94ff',
+    cyan: '#9effff',
+    pink: '#ff7aa0',
+    ink: '#193549',
+    grad: ['#ffc600', '#ff9d00', '#3ca0ff', '#9effff'],
+    meter: ['#3ad900', '#ffc600', '#ff7aa0'],
+    bg: '#193549',
   },
 }
 
@@ -1897,7 +1982,13 @@ export const register: Register = on => {
           return { text: `Theme: ${Object.keys(THEMES).join(' | ')} (đang dùng: ${await read($, theme)})` }
         }
         await setTheme($, name)
-        return { text: `Đã đổi theme: ${name}${name === 'auto' ? ' (theo theme Claude Code)' : ''}` }
+        const bg = THEMES[name]?.bg
+        return {
+          text:
+            name === 'auto'
+              ? 'Đã đổi theme: auto (theo theme Claude Code)'
+              : `Đã đổi theme: ${name}${bg ? `\n💡 Đặt màu nền terminal là ${bg} để khớp hẳn với theme.` : ''}`,
+        }
       }
       case 'sel':
         return {
@@ -2783,7 +2874,9 @@ export const register: Register = on => {
             key="all-on"
             label="Bật hết"
             dimColor
-            onPress={() => void setSettings($, Object.fromEntries(keys.map(k => [k, true])))}
+            onPress={() =>
+              void setSettings($, Object.fromEntries(keys.filter(k => !EXPERIMENTAL.has(k)).map(k => [k, true])))
+            }
           />
           <Button key="defaults" label="Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
         </Box>

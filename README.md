@@ -4,9 +4,9 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-23%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-26%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
-![Themes](https://img.shields.io/badge/themes-6-f5c2e7?style=for-the-badge)
+![Themes](https://img.shields.io/badge/themes-11-5b8def?style=for-the-badge)
 
 **Một lệnh `/mods`, cả chục thứ tiện lợi.**<br/>
 Dải trạng thái sống động · bảng điều khiển · 6 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
@@ -176,6 +176,13 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | `dracula` | ![](https://img.shields.io/badge/-%20-ff79c6?style=flat-square) ![](https://img.shields.io/badge/-%20-bd93f9?style=flat-square) ![](https://img.shields.io/badge/-%20-8be9fd?style=flat-square) ![](https://img.shields.io/badge/-%20-50fa7b?style=flat-square) | Dracula |
 | `nord` | ![](https://img.shields.io/badge/-%20-8fbcbb?style=flat-square) ![](https://img.shields.io/badge/-%20-88c0d0?style=flat-square) ![](https://img.shields.io/badge/-%20-81a1c1?style=flat-square) ![](https://img.shields.io/badge/-%20-b48ead?style=flat-square) | Nord |
 | `gruvbox` | ![](https://img.shields.io/badge/-%20-fb4934?style=flat-square) ![](https://img.shields.io/badge/-%20-fe8019?style=flat-square) ![](https://img.shields.io/badge/-%20-fabd2f?style=flat-square) ![](https://img.shields.io/badge/-%20-b8bb26?style=flat-square) | Gruvbox Dark |
+| `navy` 🌊 | ![](https://img.shields.io/badge/-%20-4f86ee?style=flat-square) ![](https://img.shields.io/badge/-%20-5b8def?style=flat-square) ![](https://img.shields.io/badge/-%20-7fb0ff?style=flat-square) ![](https://img.shields.io/badge/-%20-a5d8ff?style=flat-square) | Xanh navy cổ điển, nền `#0b1426` |
+| `midnight` 🌊 | ![](https://img.shields.io/badge/-%20-e2b714?style=flat-square) ![](https://img.shields.io/badge/-%20-f0c75e?style=flat-square) ![](https://img.shields.io/badge/-%20-9fb8ff?style=flat-square) ![](https://img.shields.io/badge/-%20-6b8cff?style=flat-square) | Navy đêm điểm vàng gold, nền `#0d1b2a` |
+| `abyss` 🌊 | ![](https://img.shields.io/badge/-%20-0ea5e9?style=flat-square) ![](https://img.shields.io/badge/-%20-14b8a6?style=flat-square) ![](https://img.shields.io/badge/-%20-2dd4bf?style=flat-square) ![](https://img.shields.io/badge/-%20-99f6e4?style=flat-square) | Navy sâu kèm xanh ngọc, nền `#06142b` |
+| `nightowl` 🌊 | ![](https://img.shields.io/badge/-%20-c792ea?style=flat-square) ![](https://img.shields.io/badge/-%20-82aaff?style=flat-square) ![](https://img.shields.io/badge/-%20-7fdbca?style=flat-square) ![](https://img.shields.io/badge/-%20-addb67?style=flat-square) | Night Owl, nền `#011627` |
+| `cobalt` 🌊 | ![](https://img.shields.io/badge/-%20-ffc600?style=flat-square) ![](https://img.shields.io/badge/-%20-ff9d00?style=flat-square) ![](https://img.shields.io/badge/-%20-3ca0ff?style=flat-square) ![](https://img.shields.io/badge/-%20-9effff?style=flat-square) | Cobalt2, navy với vàng nổi bật, nền `#193549` |
+
+🌊 = họ **navy blue dark**. Khi đổi sang một theme có tên, `/mods theme` gợi ý luôn màu nền terminal khớp với nó.
 
 > [!NOTE]
 > Các theme có tên được thiết kế cho nền tối. Màu hex cần terminal hỗ trợ truecolor; tmux cần bật `Tc`/`RGB`.
