@@ -152,6 +152,7 @@ const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
+const openCalls = atom({ plugin: 'terminal-polish', key: 'openCalls' } as const, [])
 const theme = atom({ plugin: 'terminal-polish', key: 'theme' } as const, 'auto')
 const fx = atom({ plugin: 'terminal-polish', key: 'fx' } as const, null)
 const splash = atom({ plugin: 'terminal-polish', key: 'splash' } as const, false)
@@ -227,6 +228,18 @@ async function gitIsSafe($: EngineInterface, dir?: string) {
 
 // A command is shown whole: every line, joined by ⏎, never cut to its first
 // line or truncated, so a row cannot show a harmless head and hide the rest.
+// The dashboard's compact form: short, but never silently cut. A shortened
+// label always ends in … and says how many more lines the command has, so a
+// harmless head cannot pass for the whole command; ▸ opens it in full.
+const SHORT_LABEL = 40
+function shortLabel(label: string) {
+  const parts = label.split(' ⏎ ')
+  const head = parts[0] ?? ''
+  const more = parts.length - 1
+  if (more === 0 && head.length <= SHORT_LABEL) return label
+  return `${head.length > SHORT_LABEL ? head.slice(0, SHORT_LABEL - 1) : head}…${more ? ` (+${more} dòng)` : ''}`
+}
+
 const commandLabel = (command: string) => command.trim().replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
@@ -518,7 +531,9 @@ async function recordStats($: EngineInterface, name: string, done: LastTurn, usd
     },
   }
   const keep = Object.keys(stats).sort().slice(-STATS_DAYS)
-  await $.store.set('stats', Object.fromEntries(keep.map(k => [k, stats[k]])))
+  const saved: Stats = Object.fromEntries(keep.map(k => [k, stats[k] ?? {}]))
+  await $.store.set('stats', saved)
+  return saved
 }
 
 async function statsText($: EngineInterface) {
@@ -1004,8 +1019,9 @@ const fileTag = (path: string) => FILE_TAGS[path.split('.').pop()?.toLowerCase()
 const HEAT_WEEKS = 8
 const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
 
-async function refreshHeat($: EngineInterface) {
-  const stats = await loadStats($)
+// Both take the stats a caller already holds, so one turn reads the store once.
+async function refreshHeat($: EngineInterface, loaded?: Stats) {
+  const stats = loaded ?? (await loadStats($))
   const value = Object.fromEntries(
     Object.entries(stats).map(([day, rows]) => [day, Object.values(rows).reduce((n, r) => n + r.turns, 0)]),
   )
@@ -1090,8 +1106,8 @@ async function saveProjectValue($: EngineInterface, key: string, value: unknown)
 }
 
 // ---- budget (38): today's spend from the stats, a daily limit in $.store
-async function refreshSpend($: EngineInterface) {
-  const stats = await loadStats($)
+async function refreshSpend($: EngineInterface, loaded?: Stats) {
+  const stats = loaded ?? (await loadStats($))
   const today = Object.values(stats[localDay(await $.clock.now())] ?? {}).reduce((n, r) => n + r.usd, 0)
   await update($, spentToday, () => today)
   const raw = await $.store.get('budget')
@@ -1832,10 +1848,12 @@ export const register: Register = on => {
     $.ui.toast(`🔔 ${message}`)
     const title = (await read($, project)) || 'Claude'
     const sent = await $.ui.notify(message, { title }).catch(() => undefined)
-    const delivered = sent?.isSent === true
+    // An MCP tool's result is its content: a string (or content blocks), never an object.
     return {
-      result: { delivered },
-      text: delivered ? 'Notified the user.' : 'Shown in the session as a toast; no desktop notification channel.',
+      result:
+        sent?.isSent === true
+          ? 'Notified the user.'
+          : 'Shown in the session as a toast; no desktop notification channel.',
     }
   })
 
@@ -1979,9 +1997,8 @@ export const register: Register = on => {
       const before = await read($, lastUsd)
       const spent = use?.usd != null && before != null ? Math.max(0, use.usd - before) : 0
       await update($, lastUsd, () => use?.usd ?? before)
-      await recordStats($, (await read($, project)) || 'claude', done, spent)
-      await refreshHeat($)
-      await refreshSpend($)
+      const stats = await recordStats($, (await read($, project)) || 'claude', done, spent)
+      await Promise.all([refreshHeat($, stats), refreshSpend($, stats)])
       const limit = await read($, budgetLimit)
       const spentNow = await read($, spentToday)
       const day = localDay(await $.clock.now())
@@ -2036,17 +2053,42 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const Raster = 'Raster' in t ? t.Raster : undefined
     const Image = 'Image' in t ? t.Image : undefined
-    const name = (await read($, project)) || 'claude'
-    const repo = await read($, git)
-    const now = await read($, turn)
-    const prev = await read($, last)
-    const use = await read($, usage)
+    // One round trip for everything the band draws, not one per value.
+    const [
+      projectName,
+      repo,
+      now,
+      prev,
+      use,
+      countdown,
+      pick,
+      effect,
+      isSplash,
+      splashText,
+      limit,
+      spent,
+      checked,
+      todoList,
+    ] = await Promise.all([
+      read($, project),
+      read($, git),
+      read($, turn),
+      read($, last),
+      read($, usage),
+      read($, timer),
+      read($, autoModel),
+      read($, fx),
+      read($, splash),
+      read($, splashInfo),
+      read($, budgetLimit),
+      read($, spentToday),
+      read($, check),
+      read($, todos),
+    ])
+    const name = projectName || 'claude'
     const pct = use?.percent ?? null
-    const countdown = await read($, timer)
-    const pick = await read($, autoModel)
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
-    const effect = await read($, fx)
-    const hello = s.splash && (await read($, splash)) ? await read($, splashInfo) : null
+    const hello = s.splash && isSplash ? splashText : null
     const width = e.props.bodyColumns - (s.statecolor ? 4 : 0)
     bandSite = e.requestId
     fxWidth = Math.max(1, Math.min(width, 80))
@@ -2073,18 +2115,15 @@ export const register: Register = on => {
     for (const l of limits)
       segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
     if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink })
-    const limit = await read($, budgetLimit)
     if (s.budget && limit > 0) {
-      const spent = await read($, spentToday)
       segments.push({
         text: `💰 $${spent.toFixed(2)}/$${limit.toFixed(0)}`,
         color: P.pink,
         meter: { pct: Math.round((spent / limit) * 100) },
       })
     }
-    const checked = await read($, check)
     if (checked) segments.push({ text: `${checked.ok ? '✓' : '✗'} check`, color: checked.ok ? P.ok : P.err })
-    const openTodos = (await read($, todos)).filter(x => !x.done).length
+    const openTodos = todoList.filter(x => !x.done).length
     if (s.todos && openTodos > 0) segments.push({ text: `☐ ${openTodos}`, color: P.violet })
     if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
     if (working && pick) segments.push({ text: `⚡${pick}`, color: P.info })
@@ -2216,6 +2255,7 @@ export const register: Register = on => {
     const subs = await read($, agents)
     const turns = await read($, history)
     const counts = await read($, heat)
+    const opened = await read($, openCalls)
     const now = await $.clock.now()
     const room = Math.max(3, (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - subs.length)
     const HEAT = [P.muted, ...[0.15, 0.5, 0.8, 1].map(t => colorAt(P.grad, t))]
@@ -2334,20 +2374,45 @@ export const register: Register = on => {
           {list
             .slice(-room)
             .reverse()
-            .map(call => (
-              <Box key={`call-${call.id}`} flexDirection="column">
-                <Text color={P[STATE_ROLE[call.state]]} bold={call.state === 'run'} wrap="wrap">
-                  {`${ICON[call.state]} ${call.tool}  ${call.label}`}
-                </Text>
-                {card(
-                  [
-                    `${call.tool} · ${call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`,
-                    call.label,
-                  ],
-                  P[STATE_ROLE[call.state]],
-                )}
-              </Box>
-            ))}
+            .map(call => {
+              const isOpen = opened.includes(call.id)
+              const short = shortLabel(call.label)
+              const canOpen = short !== call.label
+              return (
+                <Box key={`call-${call.id}`} flexDirection="column">
+                  <Box flexDirection="row" gap={1}>
+                    <Text color={P[STATE_ROLE[call.state]]} bold={call.state === 'run'} wrap="truncate-end">
+                      {`${ICON[call.state]} ${call.tool}  ${isOpen ? '' : short}`}
+                    </Text>
+                    {canOpen && (
+                      <Button
+                        key={`call-open-${call.id}`}
+                        label={isOpen ? '▾' : '▸'}
+                        plain
+                        dimColor
+                        onPress={() =>
+                          void update($, openCalls, l =>
+                            l.includes(call.id) ? l.filter(x => x !== call.id) : [...l, call.id].slice(-50),
+                          )
+                        }
+                      />
+                    )}
+                  </Box>
+                  {isOpen && (
+                    <Text color={P.muted} wrap="wrap">
+                      {`  ${call.label}${call.ms != null ? `  · ${(call.ms / 1000).toFixed(1)}s` : ''}`}
+                    </Text>
+                  )}
+                  {card(
+                    [
+                      `${call.tool} · ${call.state === 'run' ? 'đang chạy' : call.state === 'ok' ? 'xong' : 'lỗi'}${call.ms != null ? ` · ${(call.ms / 1000).toFixed(1)}s` : ''}`,
+                      call.label,
+                    ],
+                    P[STATE_ROLE[call.state]],
+                  )}
+                </Box>
+              )
+            })}
         </Box>
       </Box>
     )

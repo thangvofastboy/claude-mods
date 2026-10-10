@@ -85,6 +85,7 @@ declare module 'claude-code' {
       timer: TimerState | null
       expanded: string[]
       autoModel: string | null
+      openCalls: string[]
       theme: string
       fx: 'comet' | 'party' | null
       splash: boolean

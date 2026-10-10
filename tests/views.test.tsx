@@ -140,3 +140,28 @@ test('the TODO pane adds an item and ticks it off', async ($, on) => {
   expect((await ui.find({ key: 'todo-toggle-0' }))?.text).toContain('☑ viết test cho budget')
   await ui.unmount()
 })
+
+test('recent tools show short, marked labels and open in full on press', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  on('tool.call', () => ({ deny: 'test bottom' }))
+  on('ui.toast', () => ({ value: undefined }))
+  const command = 'pnpm --filter @shop/api run test:integration --reporter=verbose\nrm -rf build'
+  await $.tool.call({ tool: 'Bash', command })
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'terminal-polish-dash',
+    props: { title: 'Hoạt động', ...PANE_PROPS },
+  })
+  // Short, but never silently cut: … and the hidden line count are on the row.
+  expect(await ui.find({ type: 'Text', text: /Bash {2}pnpm --filter .*… \(\+1 dòng\)/ })).toBeDefined()
+  // The opened line (indented) is not drawn yet; the hover card holds the full text by design.
+  expect(await ui.find({ type: 'Text', text: /^ {2}pnpm --filter .* ⏎ rm -rf build/ })).toBeUndefined()
+  const toggle = await ui.find({ type: 'Button', text: /▸/ })
+  expect(toggle).toBeDefined()
+  await ui.press({ key: toggle?.key ?? '' })
+  expect(await ui.find({ type: 'Text', text: /^ {2}pnpm --filter .* ⏎ rm -rf build/ })).toBeDefined()
+  await ui.unmount()
+})
