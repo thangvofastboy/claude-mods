@@ -74,9 +74,11 @@ const DANGER: readonly [RegExp, string][] = [
 const SECRET_FILE = /(^|\/)(\.env(\.[^/]*)?|id_rsa[^/]*|id_ed25519[^/]*|[^/]+\.pem)$/
 const SECRET_TEMPLATE = /\.env\.(example|sample|template)$/
 
-// A repository's own .git/config can name programs git runs (fsmonitor, an
-// external diff, a textconv, a pager): the mod runs git in whatever repo is
-// open, so every call turns those off rather than trust that config.
+// A repository's own .git/config can name programs git runs (a filter's
+// clean/smudge, fsmonitor, an external diff, a textconv, a pager). The mod runs
+// git in whatever repo is open, so every call turns off what `-c` can, and
+// git is not run at all where the repo's own config names any program
+// (gitIsSafe); the person's global and system config are trusted.
 const SAFE_GIT = [
   'git',
   '-c',
@@ -87,6 +89,21 @@ const SAFE_GIT = [
   'core.pager=cat',
   '--no-pager',
 ] as const
+
+const PROGRAM_KEYS =
+  '^(filter\\..+\\.(clean|smudge|process)|diff\\..+\\.(command|textconv)|merge\\..+\\.driver|core\\.(fsmonitor|sshcommand|pager|hookspath|editor|askpass|gitproxy)|credential\\..*helper)$'
+
+// Reading config runs no program; `--includes` labels an included file's
+// entries with the scope of the file that included it.
+async function gitIsSafe($: EngineInterface, dir?: string) {
+  const run = await $.process.run(
+    ['git', ...(dir ? ['-C', dir] : []), 'config', '--includes', '--show-scope', '--get-regexp', PROGRAM_KEYS],
+    { timeoutMs: 3000 },
+  )
+  if (run.exitCode === 1) return true // no such key anywhere
+  if (run.exitCode !== 0) return false
+  return !run.stdout.split('\n').some(line => /^(local|worktree)\s/.test(line))
+}
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
@@ -134,6 +151,10 @@ async function setPrompts($: EngineInterface, change: (list: string[]) => string
 // Never called from a render hook: rendering only reads what this wrote.
 async function refreshGit($: EngineInterface) {
   try {
+    if (!(await gitIsSafe($))) {
+      await update($, git, () => null)
+      return
+    }
     const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
     if (head.exitCode !== 0) {
       await update($, git, () => null)
@@ -206,6 +227,12 @@ async function showDiff($: EngineInterface, path: string) {
   const dir = path.slice(0, path.lastIndexOf('/')) || '/'
   let value: Diff = { path, text: '', note: '' }
   try {
+    if (!(await gitIsSafe($, dir))) {
+      value = { ...value, note: 'Bỏ qua: .git/config của repo này khai báo chương trình git sẽ chạy.' }
+      await update($, diff, () => value)
+      await $.ui.open({ id: DIFF_PANE, title: `Diff ${baseName(path)}` })
+      return
+    }
     const run = await $.process.run(
       [...SAFE_GIT, '-C', dir, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', path],
       { timeoutMs: 5000 },
@@ -263,7 +290,8 @@ function compareVersions(a: string, b: string) {
 
 // Release tags on the repository, newest first by version.
 async function latestTag($: EngineInterface) {
-  const run = await $.process.run(['git', 'ls-remote', '--tags', '--refs', REPO], { timeoutMs: 20000 })
+  // From `/`, outside any repo: an open repo's own core.sshCommand never applies.
+  const run = await $.process.run(['git', 'ls-remote', '--tags', '--refs', REPO], { cwd: '/', timeoutMs: 20000 })
   if (run.exitCode !== 0) throw new Error(run.stderr.trim() || `git ls-remote thoát mã ${run.exitCode}`)
   const tags = run.stdout
     .split('\n')
