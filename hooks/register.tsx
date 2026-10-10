@@ -160,6 +160,10 @@ async function gitIsSafe($: EngineInterface, dir?: string) {
   return !run.stdout.split('\n').some(line => /^(local|worktree)\s/.test(line))
 }
 
+// A command is shown whole: every line, joined by ⏎, never cut to its first
+// line or truncated, so a row cannot show a harmless head and hide the rest.
+const commandLabel = (command: string) => command.trim().replace(/\s*[\r\n]+\s*/g, ' ⏎ ')
+
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 function dangerOf(command: string) {
@@ -656,7 +660,7 @@ function summaryOf(input: unknown) {
   const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : undefined)
   const path = str('file_path') ?? str('notebook_path')
   return (
-    str('command')?.split('\n')[0] ??
+    (str('command') !== undefined ? commandLabel(str('command') ?? '') : undefined) ??
     (path ? baseName(path) : undefined) ??
     str('pattern') ??
     str('url') ??
@@ -926,7 +930,7 @@ export const register: Register = on => {
   // Bookkeeping: fails open, a fault here never blocks a tool.
   on('tool.call', async ($, e, next) => {
     const path = e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'Read' ? e.file_path : undefined
-    const label = e.tool === 'Bash' ? (e.command.split('\n')[0] ?? '') : path ? baseName(path) : ''
+    const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
     const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
     await update($, calls, list => [...list, call].slice(-100))
     await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
@@ -1175,7 +1179,7 @@ export const register: Register = on => {
             .slice(-room)
             .reverse()
             .map(call => (
-              <Text color={COLOR[call.state]} bold={call.state === 'run'} wrap="truncate-end">
+              <Text color={COLOR[call.state]} bold={call.state === 'run'} wrap="wrap">
                 {`${ICON[call.state]} ${call.tool}  ${call.label}`}
               </Text>
             ))}
@@ -1441,7 +1445,7 @@ export const register: Register = on => {
         <Text backgroundColor={color} color="inverseText" bold>
           {` ${name} `}
         </Text>
-        <Text color="subtle" wrap="truncate-end">
+        <Text color="subtle" wrap={tool === 'Bash' ? 'wrap' : 'truncate-end'}>
           {summaryOf(e.props.input)}
         </Text>
       </Box>

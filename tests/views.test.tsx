@@ -65,7 +65,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       },
     })
     expect(await ui.find({ type: 'Text', text: ' Bash ' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'ls -la' })).toBeDefined()
+    // The whole command shows, every line: a harmless head cannot hide the rest.
+    expect(await ui.find({ type: 'Text', text: 'ls -la ⏎ echo hi' })).toBeDefined()
     await ui.unmount()
   })
 }
