@@ -1759,6 +1759,19 @@ async function shellReason($: EngineInterface, command: string) {
   return branchLockReason(command, head.exitCode === 0 ? head.stdout.trim() : (await read($, git))?.branch)
 }
 
+// turn.step's `model` is a resolved id, not an alias: sending "haiku" there asks
+// the API for a model named "haiku" and the turn falls back. The Haiku id is
+// read off the session's own (claude-opus-5-5 → claude-haiku-5-5; a provider
+// prefix or suffix is kept), and the step is left alone when that cannot be done.
+// ponytail: assumes Haiku shares the session model's version; a release where
+// they differ needs a lookup table here.
+function haikuIdFor(model: string) {
+  const base = model.replace(/\[1m\]$/, '')
+  if (/haiku/.test(base)) return undefined
+  const id = base.replace(/(opus|sonnet)/, 'haiku')
+  return id === base ? undefined : id
+}
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -2058,7 +2071,8 @@ export const register: Register = on => {
   // Auto model (20): a turn classified simple runs its main-thread steps on Haiku.
   on('turn.step', async function* ($, e, next) {
     const pick = e.agentId ? null : await read($, autoModel)
-    return yield* next(pick ? { ...e, model: pick } : e)
+    const model = pick === 'haiku' ? haikuIdFor(e.model) : undefined
+    return yield* next(model ? { ...e, model } : e)
   })
 
   // Abbreviations (15): expand `;key` before the prompt is sent.
