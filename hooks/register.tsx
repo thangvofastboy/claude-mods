@@ -1,12 +1,33 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Agent, Call, Diff, Git, LastTurn, Peer, Settings, Turn, Usage } from '../types'
+import type {
+  Agent,
+  Call,
+  Diff,
+  Found,
+  Git,
+  LastTurn,
+  Limit,
+  Peer,
+  Settings,
+  TimerState,
+  Totals,
+  Turn,
+  Usage,
+} from '../types'
 
 const DASH = 'terminal-polish-dash'
 const PEERS_PANE = 'terminal-polish-sessions'
 const DIFF_PANE = 'terminal-polish-diff'
 const PROMPTS_PANE = 'terminal-polish-prompts'
+const SETTINGS_PANE = 'terminal-polish-settings'
+const SELECTION_PANE = 'terminal-polish-selection'
+const FIND_PANE = 'terminal-polish-find'
+const COMPACT_PERCENT = 85
+const COLLAPSE_LINES = 3
+const NOTIFY_TOOL = 'mcp__terminal-polish__notify_me'
+const STATS_DAYS = 60
 const POLL_MS = 3000
 const TOAST_SECONDS = 60
 const NOTIFY_SECONDS = 20
@@ -24,6 +45,15 @@ const DEFAULTS: Settings = {
   voice: false,
   guard: true,
   decor: true,
+  quota: true,
+  autocompact: false,
+  abbrev: true,
+  rules: true,
+  tools: true,
+  automodel: false,
+  journal: true,
+  collapse: true,
+  badges: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -34,6 +64,15 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   voice: 'đọc to khi lượt dài xong',
   guard: 'chặn lệnh nguy hiểm và việc sửa file bí mật',
   decor: 'spinner, dòng gợi ý và dòng thời gian kiểu mới',
+  quota: 'thanh quota 5h/7d trên dải trạng thái',
+  autocompact: `tự /compact khi context từ ${COMPACT_PERCENT}% (tắt: chỉ nhắc)`,
+  abbrev: 'bung từ viết tắt ;xxx trong prompt',
+  rules: 'thêm luật của dự án vào system prompt',
+  tools: 'tool notify_me và subagent reviewer/tester cho Claude (áp dụng khi nạp lại)',
+  automodel: 'tự dùng Haiku cho câu hỏi đơn giản (thử nghiệm)',
+  journal: 'ghi nhật ký khi đóng session vào ~/.claude/mods-journal.md',
+  collapse: 'thu gọn output Bash dài còn 3 dòng',
+  badges: 'badge màu cho từng dòng tool',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 
@@ -50,6 +89,19 @@ const peers = atom({ plugin: 'terminal-polish', key: 'peers' } as const, [])
 const agents = atom({ plugin: 'terminal-polish', key: 'agents' } as const, [])
 const diff = atom({ plugin: 'terminal-polish', key: 'diff' } as const, null)
 const prompts = atom({ plugin: 'terminal-polish', key: 'prompts' } as const, [])
+const root = atom({ plugin: 'terminal-polish', key: 'root' } as const, '')
+const home = atom({ plugin: 'terminal-polish', key: 'home' } as const, '')
+const startedAt = atom({ plugin: 'terminal-polish', key: 'startedAt' } as const, 0)
+const totals = atom({ plugin: 'terminal-polish', key: 'totals' } as const, { turns: 0, seconds: 0, tools: 0 })
+const lastUsd = atom({ plugin: 'terminal-polish', key: 'lastUsd' } as const, null)
+const ctxWarned = atom({ plugin: 'terminal-polish', key: 'ctxWarned' } as const, false)
+const rules = atom({ plugin: 'terminal-polish', key: 'rules' } as const, [])
+const selection = atom({ plugin: 'terminal-polish', key: 'selection' } as const, null)
+const found = atom({ plugin: 'terminal-polish', key: 'found' } as const, [])
+const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
+const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
+const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
+const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
 const COLOR = { run: 'warning', ok: 'success', fail: 'error' } as const
@@ -128,11 +180,13 @@ function duration(ms: number) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-async function setSetting($: EngineInterface, key: keyof Settings, value: boolean) {
-  const next = await update($, settings, s => ({ ...s, [key]: value }))
+async function setSettings($: EngineInterface, patch: Partial<Settings>) {
+  const next = await update($, settings, s => ({ ...s, ...patch }))
   await $.store.set('settings', next)
   return next
 }
+
+const setSetting = ($: EngineInterface, key: keyof Settings, value: boolean) => setSettings($, { [key]: value })
 
 async function loadSettings($: EngineInterface) {
   const stored = (await $.store.get('settings')) as Partial<Record<keyof Settings, unknown>> | undefined
@@ -177,7 +231,11 @@ async function refreshGit($: EngineInterface) {
 async function refreshUsage($: EngineInterface) {
   try {
     const u = await $.session.usage()
-    const value: Usage = { percent: u.context.percent ?? null, usd: u.cost?.usd ?? null }
+    const value: Usage = {
+      percent: u.context.percent ?? null,
+      usd: u.cost?.usd ?? null,
+      limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
+    }
     await update($, usage, () => value)
   } catch {
     // Usage is decoration: the band simply leaves it out.
@@ -363,10 +421,261 @@ async function updatePlugin($: EngineInterface) {
   ].join('\n')
 }
 
+const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: '$' }
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const localDay = (ms: number) => {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+const levelColor = (pct: number) => (pct >= 80 ? 'error' : pct >= 60 ? 'warning' : 'subtle')
+
+// ---- stats (12, 14): kept across sessions in $.store, one row per day and project
+type DayStats = { turns: number; seconds: number; tools: number; usd: number }
+type Stats = Record<string, Record<string, DayStats>>
+
+async function loadStats($: EngineInterface): Promise<Stats> {
+  const raw = await $.store.get('stats')
+  return raw && typeof raw === 'object' ? (raw as Stats) : {}
+}
+
+// ponytail: read-modify-write on one store key; sessions running at once can
+// drop each other's turns (last writer wins). Per-session keys summed on read
+// is the upgrade if the numbers need to be exact.
+async function recordStats($: EngineInterface, name: string, done: LastTurn, usd: number) {
+  const stats = await loadStats($)
+  const day = localDay(await $.clock.now())
+  const row = stats[day]?.[name] ?? { turns: 0, seconds: 0, tools: 0, usd: 0 }
+  stats[day] = {
+    ...stats[day],
+    [name]: {
+      turns: row.turns + 1,
+      seconds: row.seconds + done.seconds,
+      tools: row.tools + done.tools,
+      usd: row.usd + usd,
+    },
+  }
+  const keep = Object.keys(stats).sort().slice(-STATS_DAYS)
+  await $.store.set('stats', Object.fromEntries(keep.map(k => [k, stats[k]])))
+}
+
+async function statsText($: EngineInterface) {
+  const stats = await loadStats($)
+  const days = Object.keys(stats).sort().slice(-7)
+  if (days.length === 0) return 'Chưa có số liệu. Số liệu được ghi sau mỗi lượt.'
+  const sum = (rows: DayStats[]) =>
+    rows.reduce(
+      (a, r) => ({
+        turns: a.turns + r.turns,
+        seconds: a.seconds + r.seconds,
+        tools: a.tools + r.tools,
+        usd: a.usd + r.usd,
+      }),
+      { turns: 0, seconds: 0, tools: 0, usd: 0 },
+    )
+  const line = (label: string, r: DayStats) =>
+    `  ${label.padEnd(22)}${String(r.turns).padStart(5)} lượt ${duration(r.seconds * 1000).padStart(8)} ${String(r.tools).padStart(6)} tool  $${r.usd.toFixed(2)}`
+  const today = localDay(await $.clock.now())
+  const week = sum(days.flatMap(d => Object.values(stats[d] ?? {})))
+  return [
+    '7 ngày gần nhất:',
+    ...days.map(d => line(d, sum(Object.values(stats[d] ?? {})))),
+    line('Tổng 7 ngày', week),
+    `Hôm nay theo dự án:`,
+    ...Object.entries(stats[today] ?? {}).map(([name, r]) => line(name, r)),
+  ].join('\n')
+}
+
+// ---- abbreviations (15): `;key` in a prompt expands to its text
+async function loadAbbrevs($: EngineInterface): Promise<Record<string, string>> {
+  const raw = await $.store.get('abbrevs')
+  return raw && typeof raw === 'object' ? (raw as Record<string, string>) : {}
+}
+
+function expandAbbrevs(text: string, abbrevs: Record<string, string>) {
+  return text.replace(/(^|\s)(;[\p{L}\p{N}_-]+)(?=\s|$)/gu, (whole: string, pre: string, key: string) =>
+    typeof abbrevs[key] === 'string' ? pre + abbrevs[key] : whole,
+  )
+}
+
+async function abbrevCommand($: EngineInterface, rest: string) {
+  const abbrevs = await loadAbbrevs($)
+  const [key = '', ...words] = rest.split(/\s+/).filter(Boolean)
+  if (!key) {
+    const rows = Object.entries(abbrevs).map(([k, v]) => `  ${k.padEnd(12)}${v.length > 70 ? `${v.slice(0, 69)}…` : v}`)
+    return rows.length
+      ? ['Từ viết tắt:', ...rows].join('\n')
+      : 'Chưa có từ viết tắt. Thêm: /mods abbrev ;fix <nội dung>'
+  }
+  const name = key.startsWith(';') ? key : `;${key}`
+  if (words.length === 0) {
+    delete abbrevs[name]
+    await $.store.set('abbrevs', abbrevs)
+    return `Đã xóa ${name}`
+  }
+  abbrevs[name] = words.join(' ')
+  await $.store.set('abbrevs', abbrevs)
+  return `Đã lưu: ${name} → ${abbrevs[name]}`
+}
+
+// ---- project rules (17): per project root, added to the system prompt
+async function loadRules($: EngineInterface) {
+  const raw = await $.store.get('rules')
+  const all = raw && typeof raw === 'object' ? (raw as Record<string, string[]>) : {}
+  return all
+}
+
+async function setRules($: EngineInterface, change: (list: string[]) => string[]) {
+  const all = await loadRules($)
+  const key = await read($, root)
+  const list = change(Array.isArray(all[key]) ? all[key] : [])
+  all[key] = list
+  await $.store.set('rules', all)
+  await update($, rules, () => list)
+  return list
+}
+
+const rulesText = (list: string[]) =>
+  list.length
+    ? ['Luật của dự án này:', ...list.map((r, i) => `  ${i + 1}. ${r}`), 'Xóa: /mods unrule <số>'].join('\n')
+    : 'Dự án này chưa có luật. Thêm: /mods rule <nội dung>'
+
+// ---- find (22): search this session's messages
+async function findCommand($: EngineInterface, text: string) {
+  if (!text) return { text: 'Cách dùng: /mods find <từ khóa>' }
+  const needle = text.toLowerCase()
+  const hits: Found[] = []
+  for (const m of await $.session.messages()) {
+    const at = m.text.toLowerCase().indexOf(needle)
+    if (at < 0) continue
+    const from = Math.max(0, at - 60)
+    const snippet = `${from > 0 ? '…' : ''}${m.text.slice(from, at + needle.length + 80).replace(/\s+/g, ' ')}…`
+    hits.push({ role: m.role, snippet })
+  }
+  await update($, query, () => text)
+  await update($, found, () => hits.slice(-40))
+  await $.ui.open({ id: FIND_PANE, title: `Tìm "${text}"` })
+  return { text: `${hits.length} kết quả cho "${text}".` }
+}
+
+// ---- timer (23): a countdown on the band, a notification at the end
+let timerHandles: Timer[] = []
+
+function stopTimer() {
+  for (const t of timerHandles) t.cancel()
+  timerHandles = []
+}
+
+async function armTimer($: EngineInterface, endsAt: number) {
+  stopTimer()
+  const tick = async () => {
+    const left = Math.max(0, Math.ceil((endsAt - (await $.clock.now())) / 60000))
+    const value: TimerState = { endsAt, left }
+    await update($, timer, () => value)
+  }
+  await tick()
+  const now = await $.clock.now()
+  timerHandles = [
+    $.clock.every(15000, () => void tick()),
+    $.clock.after(Math.max(0, endsAt - now), () => {
+      stopTimer()
+      void update($, timer, () => null)
+      $.ui.toast('⏰ Hết giờ!')
+      void $.ui.notify('Hết giờ!', { title: 'terminal-polish' }).catch(() => undefined)
+      void read($, settings).then(s => {
+        if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
+      })
+    }),
+  ]
+}
+
+async function timerCommand($: EngineInterface, rest: string) {
+  const minutes = Number.parseFloat(rest)
+  if (!rest || !(minutes > 0)) {
+    const t = await read($, timer)
+    stopTimer()
+    await update($, timer, () => null)
+    return t ? 'Đã hủy hẹn giờ.' : 'Cách dùng: /mods timer <phút>   (không số: hủy)'
+  }
+  const endsAt = (await $.clock.now()) + Math.min(minutes, 24 * 60) * 60000
+  await armTimer($, endsAt)
+  return `⏱ Hẹn giờ ${minutes} phút.`
+}
+
+// ---- selection (16): act on what the person selected in the fullscreen transcript
+async function grabSelection($: EngineInterface) {
+  const picked = await $.ui.selection()
+  if (!picked?.text.trim()) {
+    $.ui.toast('Chưa bôi đen gì (chỉ có ở chế độ fullscreen)')
+    return false
+  }
+  await update($, selection, () => picked.text)
+  await $.ui.open({ id: SELECTION_PANE, title: 'Đoạn đã chọn' })
+  return true
+}
+
+// ---- journal (21): one entry per session, appended at its end
+async function writeJournal($: EngineInterface) {
+  const dir = await read($, home)
+  if (!dir) return
+  const path = `${dir}/.claude/mods-journal.md`
+  const t = await read($, totals)
+  const use = await read($, usage)
+  const touched = await read($, files)
+  const now = await $.clock.now()
+  const began = await read($, startedAt)
+  const d = new Date(now)
+  const entry = [
+    `## ${localDay(now)} ${pad2(d.getHours())}:${pad2(d.getMinutes())} · ${(await read($, project)) || 'claude'}`,
+    `- ${t.turns} lượt · ${duration(Math.max(0, now - began))} · ${t.tools} tool${use?.usd != null ? ` · $${use.usd.toFixed(2)}` : ''}`,
+    `- File đã sửa: ${touched.length ? touched.map(baseName).join(', ') : 'không có'}`,
+    '',
+  ].join('\n')
+  let before = '# Nhật ký Claude Code (terminal-polish)\n\n'
+  try {
+    before = await $.fs.read(path)
+  } catch {
+    // First entry.
+  }
+  await $.fs.write(path, `${before}${before.endsWith('\n') ? '' : '\n'}${entry}`)
+}
+
+// ---- tool badges (25): only tools whose own row is a single line; Edit,
+// Write, TodoWrite and the like draw a diff or a list the badge would hide.
+const BADGE: Record<string, string> = {
+  Bash: 'warning',
+  Read: 'suggestion',
+  Grep: 'permission',
+  Glob: 'permission',
+  Agent: 'claude',
+  WebFetch: 'ide',
+  WebSearch: 'ide',
+}
+
+function summaryOf(input: unknown) {
+  const i = (input ?? {}) as Record<string, unknown>
+  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : undefined)
+  const path = str('file_path') ?? str('notebook_path')
+  return (
+    str('command')?.split('\n')[0] ??
+    (path ? baseName(path) : undefined) ??
+    str('pattern') ??
+    str('url') ??
+    str('query') ??
+    str('description') ??
+    str('prompt')?.slice(0, 80) ??
+    ''
+  )
+}
+
+const openSettings = ($: EngineInterface) => $.ui.open({ id: SETTINGS_PANE, title: 'Cài đặt' })
+
+const REVIEWER_PROMPT = `You review code changes. Read the diff or files you are pointed at, then report only real problems: correctness bugs, security issues, missed edge cases, and needless complexity. For each finding give file:line, what goes wrong, and the smallest fix. Do not edit files. If nothing is wrong, say so plainly. Answer in the language the request was written in.`
+const TESTER_PROMPT = `You test a change. Find how the project runs its tests, write the smallest tests that would fail if the change were wrong, run them, and report the exact commands and their output. Do not change non-test code. If something fails, show the failure and your best reading of its cause. Answer in the language the request was written in.`
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
-    key => `  ${key.padEnd(9)}${s[key] ? '[bật] ' : '[tắt] '}${SETTING_INFO[key]}`,
+    key => `  ${key.padEnd(12)}${s[key] ? '[bật] ' : '[tắt] '}${SETTING_INFO[key]}`,
   )
   return [
     'Cách dùng: /mods <lệnh>',
@@ -375,6 +684,14 @@ async function helpText($: EngineInterface) {
     '  dash      bảng hoạt động: subagent, git, tốc độ, file đã sửa (bấm để xem diff), tool',
     '  prompts   prompt nhanh: bấm để gửi',
     '  save <x>  lưu x thành một prompt nhanh',
+    '  settings  tab cài đặt: bật/tắt nhanh mọi tính năng',
+    '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
+    '  find <x>  tìm x trong hội thoại này',
+    'Công cụ:',
+    '  stats              chi phí, số lượt, thời gian 7 ngày gần nhất',
+    '  abbrev [;k nội dung]  xem / thêm / xóa (bỏ nội dung) từ viết tắt',
+    '  rule <x> · rules · unrule <số>  luật riêng của dự án này',
+    '  timer <phút>       hẹn giờ (không số: hủy)',
     'Phiên bản:',
     '  version   phiên bản đang dùng và tag mới nhất',
     '  update    cập nhật lên tag mới nhất rồi tự /reload-plugins',
@@ -390,9 +707,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'mods',
-        description: 'Giao diện: sessions, dash, prompts, save, version, update, và bật/tắt từng tính năng',
+        description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'sessions | dash | prompts | save <prompt> | version | update | band | cards | tldr | notify | sound | voice | guard | decor',
+          'settings | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
       })
     } catch {
       $.ui.toast('terminal-polish: không đăng ký được /mods')
@@ -404,17 +721,62 @@ export const register: Register = on => {
     }
     try {
       await update($, project, () => '')
-      const root = baseName(await $.session.root())
-      await update($, project, () => root)
+      const rootPath = await $.session.root()
+      await update($, root, () => rootPath)
+      await update($, project, () => baseName(rootPath))
+      const all = await loadRules($)
+      const list = Array.isArray(all[rootPath]) ? all[rootPath] : []
+      await update($, rules, () => list)
     } catch {
       // The band falls back to its own label.
     }
     await refreshGit($)
     await refreshUsage($)
     try {
-      const home = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
+      const now = await $.clock.now()
+      await update($, startedAt, t => t || now)
+      await update($, lastUsd, () => null)
+      const use = await read($, usage)
+      await update($, lastUsd, () => use?.usd ?? null)
+      const t = await read($, timer)
+      if (t && t.endsAt > now) await armTimer($, t.endsAt)
+    } catch {
+      // Stats and the timer start fresh.
+    }
+    try {
+      if ((await read($, settings)).tools) {
+        await $.tool.register({
+          name: 'notify_me',
+          description:
+            'Notify the user right away (a desktop notification and a toast) when you need their decision or finished a long task they may not be watching. Use sparingly.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string', description: 'One short sentence for the user' } },
+            required: ['message'],
+          },
+          isDeferred: false,
+        })
+        await $.agent.register({
+          name: 'reviewer',
+          description: 'Reviews a diff or files for bugs, security issues and needless complexity; read-only.',
+          prompt: REVIEWER_PROMPT,
+          tools: ['Read', 'Grep', 'Glob', 'Bash'],
+        })
+        await $.agent.register({
+          name: 'tester',
+          description: 'Writes and runs the smallest tests for a change and reports the evidence.',
+          prompt: TESTER_PROMPT,
+          tools: ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write'],
+        })
+      }
+    } catch {
+      // The rest of the mod runs without them.
+    }
+    try {
+      const homeDir = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
+      await update($, home, () => homeDir)
       const selfId = await $.session.id()
-      const dir = `${home}/.claude/sessions`
+      const dir = `${homeDir}/.claude/sessions`
       await refreshPeers($, dir, selfId)
       $.clock.every(POLL_MS, () => {
         void refreshPeers($, dir, selfId)
@@ -437,6 +799,33 @@ export const register: Register = on => {
         return placed(await openDash($), 'Đã mở bảng hoạt động.')
       case 'prompts':
         return placed(await openPrompts($), 'Đã mở prompt nhanh.')
+      case 'settings':
+        return placed(await openSettings($), 'Đã mở tab cài đặt.')
+      case 'sel':
+        return {
+          text: (await grabSelection($))
+            ? 'Đã lấy đoạn đang bôi đen.'
+            : 'Chưa bôi đen gì: bôi đen một đoạn trong transcript (chế độ fullscreen) rồi thử lại.',
+        }
+      case 'find':
+        return findCommand($, args.slice(word.length).trim())
+      case 'stats':
+        return { text: await statsText($) }
+      case 'abbrev':
+        return { text: await abbrevCommand($, args.slice(word.length).trim()) }
+      case 'rule': {
+        const text = args.slice(word.length).trim()
+        if (!text) return { text: 'Cách dùng: /mods rule <nội dung luật>' }
+        return { text: rulesText(await setRules($, list => [...list, text])) }
+      }
+      case 'rules':
+        return { text: rulesText(await read($, rules)) }
+      case 'unrule': {
+        const at = Number.parseInt(args.slice(word.length), 10) - 1
+        return { text: rulesText(await setRules($, list => list.filter((_, i) => i !== at))) }
+      }
+      case 'timer':
+        return { text: await timerCommand($, args.slice(word.length).trim()) }
       case 'version':
         return { text: await versionText($) }
       case 'update':
@@ -459,6 +848,78 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     const value: Turn = { tools: 0, failed: 0 }
     await update($, turn, () => value)
+    await update($, autoModel, () => null)
+    if ((await read($, settings)).automodel && e.text.trim()) {
+      try {
+        const label = await $.model.classify(
+          e.text.slice(0, 4000),
+          ['simple: a quick question or a small, local edit', 'complex: multi-step work, debugging, design or review'],
+          { model: 'haiku' },
+        )
+        if (label?.startsWith('simple')) await update($, autoModel, () => 'haiku')
+      } catch {
+        // Keep the session's own model.
+      }
+    }
+    return next(e)
+  })
+
+  // Auto model (20): a turn classified simple runs its main-thread steps on Haiku.
+  on('turn.step', async function* ($, e, next) {
+    const pick = e.agentId ? null : await read($, autoModel)
+    return yield* next(pick ? { ...e, model: pick } : e)
+  })
+
+  // Abbreviations (15): expand `;key` before the prompt is sent.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind !== 'composer' || !(await read($, settings)).abbrev) return next(e)
+    const text = expandAbbrevs(e.text, await loadAbbrevs($))
+    return next(text === e.text ? e : { ...e, text })
+  })
+
+  // Project rules (17): appended to the system prompt, last.
+  on('prompt.compose', async ($, e, next) => {
+    const ran = await next(e)
+    const list = await read($, rules)
+    if (!(await read($, settings)).rules || list.length === 0) return ran
+    return {
+      ...ran,
+      sections: [
+        ...ran.sections,
+        {
+          id: 'terminal-polish-rules',
+          scope: 'session' as const,
+          text: ['Project rules the user set for this repository (follow them):', ...list.map(r => `- ${r}`)].join(
+            '\n',
+          ),
+        },
+      ],
+    }
+  })
+
+  // notify_me (18): a tool the model calls to reach the user.
+  on('tool.call', { tool: NOTIFY_TOOL }, async ($, e) => {
+    if (!(await read($, settings)).tools) {
+      return { deny: 'The user turned notify_me off.' }
+    }
+    const raw = (e as unknown as { message?: unknown }).message
+    const message = (typeof raw === 'string' ? raw : '').trim().slice(0, 300) || 'Claude cần bạn.'
+    $.ui.toast(`🔔 ${message}`)
+    const title = (await read($, project)) || 'Claude'
+    const sent = await $.ui.notify(message, { title }).catch(() => undefined)
+    const delivered = sent?.isSent === true
+    return {
+      result: { delivered },
+      text: delivered ? 'Notified the user.' : 'Shown in the session as a toast; no desktop notification channel.',
+    }
+  })
+
+  on('session.end', async ($, e, next) => {
+    try {
+      if ((await read($, settings)).journal) await writeJournal($)
+    } catch {
+      // Exits stay fast; a lost entry is the cost.
+    }
     return next(e)
   })
 
@@ -519,6 +980,12 @@ export const register: Register = on => {
     await update($, last, () => done)
     await update($, history, list => [...list, done].slice(-20))
     await update($, turn, () => null)
+    await update($, autoModel, () => null)
+    await update($, totals, x => ({
+      turns: x.turns + 1,
+      seconds: x.seconds + done.seconds,
+      tools: x.tools + done.tools,
+    }))
 
     const summary = `Xong sau ${duration(e.durationMs)} · ${done.tools} tool${done.failed ? ` · ${done.failed} lỗi` : ''}`
     if (done.seconds >= TOAST_SECONDS) $.ui.toast(`✓ ${summary}`)
@@ -530,6 +997,29 @@ export const register: Register = on => {
     }
     await refreshGit($)
     await refreshUsage($)
+    try {
+      const use = await read($, usage)
+      const before = await read($, lastUsd)
+      const spent = use?.usd != null && before != null ? Math.max(0, use.usd - before) : 0
+      await update($, lastUsd, () => use?.usd ?? before)
+      await recordStats($, (await read($, project)) || 'claude', done, spent)
+
+      // Auto-compact (13): once per crossing; compacting runs after this turn has closed.
+      const pct = use?.percent ?? 0
+      if (pct < COMPACT_PERCENT) {
+        await update($, ctxWarned, () => false)
+      } else if (!(await read($, ctxWarned))) {
+        await update($, ctxWarned, () => true)
+        if (s.autocompact) {
+          $.ui.toast(`Context ${pct}%: đang tự /compact…`)
+          $.clock.after(500, () => void $.session.compact({}).catch(() => undefined))
+        } else {
+          $.ui.toast(`Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
+        }
+      }
+    } catch {
+      // Stats are best effort.
+    }
 
     if (s.tldr && e.reason === 'answer' && !e.isAborted && e.answer.length >= TLDR_MIN_CHARS) {
       const reply = await $.model.complete({
@@ -560,6 +1050,9 @@ export const register: Register = on => {
     const prev = await read($, last)
     const use = await read($, usage)
     const pct = use?.percent ?? null
+    const countdown = await read($, timer)
+    const pick = await read($, autoModel)
+    const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
 
     return (
       <Box flexDirection="row" flexWrap="wrap" width={e.props.bodyColumns} justifyContent="space-between" columnGap={2}>
@@ -594,11 +1087,18 @@ export const register: Register = on => {
             </Text>
           )}
           {use?.usd != null && <Text color="subtle"> ${use.usd.toFixed(2)}</Text>}
+          {limits.map(l => (
+            <Text color={levelColor(l.percent)}>{`  ${LIMIT_LABEL[l.kind] ?? l.kind} ${l.percent}%`}</Text>
+          ))}
+          {countdown && <Text color="warning">{`  ⏱ ${countdown.left}m`}</Text>}
+          {e.props.isWorking && pick && <Text color="suggestion">{`  ⚡${pick}`}</Text>}
         </Box>
         <Box flexDirection="row" gap={1}>
           <Button key="sessions" label="Session" hotkey="s" dimColor onPress={() => void openPeers($)} />
           <Button key="dash" label="Bảng" hotkey="d" dimColor onPress={() => void openDash($)} />
           <Button key="prompts" label="Prompt" hotkey="p" dimColor onPress={() => void openPrompts($)} />
+          <Button key="settings" label="Cài đặt" hotkey="c" dimColor onPress={() => void openSettings($)} />
+          <Button key="sel" label="Chọn" hotkey="v" dimColor onPress={() => void grabSelection($)} />
           <Button key="hide" label="Ẩn" hotkey="h" dimColor onPress={() => setSetting($, 'band', false)} />
         </Box>
       </Box>
@@ -804,6 +1304,146 @@ export const register: Register = on => {
             }}
           />
         )}
+      </Box>
+    )
+  })
+
+  // Settings tab: every feature one press away.
+  on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const s = await read($, settings)
+    const keys = Object.keys(SETTING_INFO) as (keyof Settings)[]
+    const enabled = keys.filter(k => s[k]).length
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color="subtle">
+          {enabled}/{keys.length} đang bật · bấm để đổi · giữ qua các session
+        </Text>
+        <Box flexDirection="row" gap={1} marginBottom={1}>
+          <Button
+            key="all-on"
+            label="Bật hết"
+            dimColor
+            onPress={() => void setSettings($, Object.fromEntries(keys.map(k => [k, true])))}
+          />
+          <Button key="defaults" label="Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
+        </Box>
+        {keys.map(k => (
+          <Button
+            key={`set-${k}`}
+            label={`${s[k] ? '● bật' : '○ tắt'}  ${k.padEnd(12)}${SETTING_INFO[k]}`}
+            plain
+            dimColor={!s[k]}
+            onPress={() => void setSetting($, k, !s[k])}
+          />
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SELECTION_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const text = await read($, selection)
+    if (!text) {
+      return <Text color="subtle">Bôi đen một đoạn trong transcript rồi bấm [Chọn] hoặc /mods sel.</Text>
+    }
+    const ask = (verb: string) => () => {
+      void $.prompt.submit({ text: `${verb}:\n\n${text}` })
+      $.ui.toast('Đã xếp hàng prompt')
+    }
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color="subtle">{text.length > 400 ? `${text.slice(0, 399)}…` : text}</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={1}>
+          <Button key="explain" label="Giải thích" hotkey="1" onPress={ask('Giải thích đoạn sau')} />
+          <Button key="translate" label="Dịch Việt ⇄ Anh" hotkey="2" onPress={ask('Dịch đoạn sau (Việt ⇄ Anh)')} />
+          <Button key="summarize" label="Tóm tắt" hotkey="3" onPress={ask('Tóm tắt ngắn gọn đoạn sau')} />
+          <Button
+            key="copy"
+            label="Copy sạch"
+            hotkey="4"
+            onPress={() => void $.ui.copy({ text: text.replace(/[ \t]+$/gm, '').trim(), surface: e.surface })}
+          />
+        </Box>
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: FIND_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const hits = await read($, found)
+    const q = await read($, query)
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Text color="subtle">
+          {hits.length} kết quả cho “{q}”
+        </Text>
+        {hits.map(h => (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={h.role === 'user' ? 'claude' : 'suggestion'} bold>
+              {h.role === 'user' ? '❯ Bạn' : '◆ Claude'}
+            </Text>
+            <Text>{h.snippet}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
+  })
+
+  // Collapse (24): a long Bash output shows its head and a press to open it.
+  on('ui.render', { component: 'ToolResult', props: { tool: 'Bash' } }, async ($, e, next) => {
+    if (!(await read($, settings)).collapse || e.props.isErrored) return next(e)
+    const out = e.props.output as { stdout?: unknown } | undefined
+    const lines = typeof out?.stdout === 'string' ? out.stdout.replace(/\n+$/, '').split('\n') : []
+    if (lines.length <= COLLAPSE_LINES + 2) return next(e)
+    const id = e.props.tool_use_id
+    if ((await read($, expanded)).includes(id)) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="column">
+        {lines.slice(0, COLLAPSE_LINES).map(line => (
+          <Text wrap="truncate-end">{line}</Text>
+        ))}
+        <Button
+          key={`more-${id}`}
+          label={`… ${lines.length - COLLAPSE_LINES} dòng nữa · bấm để mở`}
+          plain
+          dimColor
+          onPress={() => void update($, expanded, list => [...list, id].slice(-200))}
+        />
+      </Box>
+    )
+  })
+
+  // Badges (25): one coloured label per tool row.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    const { tool, isRunning, isErrored, isInterrupted } = e.props
+    const isMcp = tool.startsWith('mcp__')
+    if (!(await read($, settings)).badges || !(tool in BADGE || isMcp)) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const name = isMcp ? (tool.split('__').pop() ?? tool) : tool
+    const color = BADGE[tool] ?? 'merged'
+    const [icon, iconColor] = isRunning
+      ? ['◌', 'warning']
+      : isInterrupted
+        ? ['⊘', 'subtle']
+        : isErrored
+          ? ['✗', 'error']
+          : ['✓', 'success']
+
+    return (
+      <Box flexDirection="row" gap={1}>
+        <Text color={iconColor}>{icon}</Text>
+        <Text backgroundColor={color} color="inverseText" bold>
+          {` ${name} `}
+        </Text>
+        <Text color="subtle" wrap="truncate-end">
+          {summaryOf(e.props.input)}
+        </Text>
       </Box>
     )
   })

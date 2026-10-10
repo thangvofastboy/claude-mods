@@ -7,11 +7,24 @@ export type Settings = {
   voice: boolean
   guard: boolean
   decor: boolean
+  quota: boolean
+  autocompact: boolean
+  abbrev: boolean
+  rules: boolean
+  tools: boolean
+  automodel: boolean
+  journal: boolean
+  collapse: boolean
+  badges: boolean
 }
 export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number }
 export type LastTurn = { seconds: number; tools: number; failed: number }
-export type Usage = { percent: number | null; usd: number | null }
+export type Limit = { kind: string; percent: number }
+export type Usage = { percent: number | null; usd: number | null; limits: Limit[] }
+export type Totals = { turns: number; seconds: number; tools: number }
+export type Found = { role: 'user' | 'assistant'; snippet: string }
+export type TimerState = { endsAt: number; left: number }
 export type Peer = { id: string; name: string; cwd: string; status: string; isSelf: boolean }
 export type Agent = { id: string; label: string; status: string }
 export type Diff = { path: string; text: string; note: string }
@@ -33,6 +46,19 @@ declare module 'claude-code' {
       agents: Agent[]
       diff: Diff | null
       prompts: string[]
+      root: string
+      home: string
+      startedAt: number
+      totals: Totals
+      lastUsd: number | null
+      ctxWarned: boolean
+      rules: string[]
+      selection: string | null
+      found: Found[]
+      query: string
+      timer: TimerState | null
+      expanded: string[]
+      autoModel: string | null
     }
   }
 }

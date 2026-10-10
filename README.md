@@ -21,7 +21,19 @@ Màu sắc lấy theo theme Claude Code bạn đang dùng, nên hợp cả nền
 | 🔔 **Báo khi xong** | Lượt chạy từ 20 giây trở lên: hiện thông báo của hệ điều hành; tuỳ chọn thêm âm thanh hoặc đọc to. |
 | 💬 **Thẻ tin nhắn** | Prompt bạn gõ được đóng khung bo góc, dễ phân biệt với câu trả lời. |
 | 🎨 **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
-| 💾 **Nhớ cài đặt** | Bật/tắt tính năng nào thì giữ nguyên ở các session sau. |
+| ⚙️ **Tab Cài đặt** | `/mods settings` hoặc nút **Cài đặt**: bật/tắt mọi tính năng bằng một lần bấm, có nút **Bật hết** và **Mặc định**. Cài đặt được giữ ở các session sau. |
+| 📈 **Quota & context** | Thanh `5h 34% · 7d 12%` trên dải trạng thái. Khi context từ 85%: nhắc `/compact`, hoặc tự compact nếu bật `autocompact`. |
+| 💵 **Thống kê** | `/mods stats`: số lượt, thời gian, tool và chi phí của 7 ngày gần nhất, cùng số liệu hôm nay theo từng dự án. |
+| ⌨️ **Từ viết tắt** | `/mods abbrev ;fix Sửa lỗi này và chạy lại test`; sau đó gõ `;fix` trong prompt là tự bung ra. |
+| ✂️ **Đoạn bôi đen** | Bôi đen một đoạn trong transcript (chế độ fullscreen) rồi bấm **Chọn** để giải thích, dịch Việt ⇄ Anh, tóm tắt hoặc copy sạch. |
+| 📏 **Luật dự án** | `/mods rule luôn dùng pnpm`: luật riêng cho từng dự án, tự thêm vào system prompt. Xem bằng `/mods rules`, xóa bằng `/mods unrule <số>`. |
+| 🔔 **Tool cho Claude** | Claude có tool `notify_me` để chủ động báo bạn, cùng 2 subagent `terminal-polish:reviewer` (review, chỉ đọc) và `terminal-polish:tester` (viết và chạy test). |
+| ⚡ **Tự chọn model** | *(thử nghiệm, mặc định tắt)* câu hỏi đơn giản tự chạy bằng Haiku. Dải trạng thái hiện `⚡haiku` khi chế độ này được dùng. |
+| 📓 **Nhật ký** | Khi đóng session, ghi số lượt, thời gian, chi phí và các file đã sửa vào `~/.claude/mods-journal.md`. |
+| 🔎 **Tìm trong hội thoại** | `/mods find <từ khóa>` mở panel kết quả, kèm đoạn văn xung quanh chỗ tìm thấy. |
+| ⏱ **Hẹn giờ** | `/mods timer 25`: đếm ngược trên dải trạng thái, hết giờ thì báo. |
+| 📦 **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào là mở ra đầy đủ. |
+| 🏷️ **Badge tool** | Dòng của các tool một dòng (Bash, Read, Grep, Glob, Agent, Web, MCP) có nhãn màu kèm ✓ / ✗ / ◌. Edit, Write và TodoWrite vẫn giữ cách hiển thị gốc để không mất diff. |
 
 ## Cài đặt
 
@@ -39,15 +51,22 @@ Rồi gõ `/mods` để xem hướng dẫn.
 | Lệnh | Tác dụng |
 | --- | --- |
 | `/mods` | Hướng dẫn và trạng thái bật/tắt của từng tính năng |
+| `/mods settings` | Tab cài đặt: bật/tắt nhanh mọi tính năng |
+| `/mods sel` | Hành động với đoạn đang bôi đen |
+| `/mods find <x>` | Tìm trong hội thoại này |
+| `/mods stats` | Thống kê 7 ngày |
+| `/mods abbrev [;k nội dung]` | Xem / thêm / xóa (bỏ trống nội dung) từ viết tắt |
+| `/mods rule <x>` · `rules` · `unrule <số>` | Luật riêng của dự án |
+| `/mods timer <phút>` | Hẹn giờ (không kèm số: hủy) |
 | `/mods sessions` | Panel các session đang chạy |
 | `/mods dash` | Bảng hoạt động |
 | `/mods prompts` | Prompt nhanh |
 | `/mods save <prompt>` | Lưu một prompt nhanh |
 | `/mods version` | Phiên bản đang dùng và tag mới nhất |
 | `/mods update` | Cập nhật lên tag mới nhất, xong tự chạy `/reload-plugins` |
-| `/mods band` · `cards` · `tldr` · `notify` · `sound` · `voice` · `guard` · `decor` | Bật/tắt từng tính năng |
+| `/mods <tên tính năng>` | Bật/tắt một tính năng: `band` `cards` `tldr` `notify` `sound` `voice` `guard` `decor` `quota` `autocompact` `abbrev` `rules` `tools` `automodel` `journal` `collapse` `badges` |
 
-Mặc định: `sound` và `voice` **tắt**, các tính năng còn lại **bật**.
+Mặc định: `sound`, `voice`, `autocompact` và `automodel` **tắt**, các tính năng còn lại **bật**. Bật/tắt `tools` có hiệu lực từ lần nạp lại plugin tiếp theo.
 
 **Mẹo:**
 - Muốn gõ vào ô nhập trong panel (nhắn tin, thêm prompt) thì bấm **ctrl+x tab** để chuyển vào panel, Esc để quay về prompt.
@@ -85,7 +104,7 @@ hooks/
   hooks.json         khai báo module
   register.tsx       toàn bộ mod
 types/index.d.ts     kiểu dữ liệu của $.state
-tests/               test cho dải trạng thái, panel, bộ chặn lệnh, update
+tests/               test cho dải trạng thái, panel, cài đặt, thu gọn output, badge, bộ chặn lệnh, update
 sounds/done.wav      âm báo khi xong
 scripts/release.sh   đánh tag và phát hành
 ```
@@ -95,4 +114,6 @@ scripts/release.sh   đánh tag và phát hành
 - Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code, không phải API chính thức; một bản cập nhật Claude Code có thể làm panel trống.
 - Mod vẽ **bên trong** giao diện Claude Code. Mod không tạo được cửa sổ riêng, tab hay chia khung kiểu terminal multiplexer, và không chuyển thẳng sang session khác được (dùng nút copy lệnh resume).
 - Bộ chặn lệnh là lớp bảo vệ **best-effort** bằng regex, không phải sandbox: nó bắt những cách viết phổ biến, nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đừng coi nó thay cho chế độ phân quyền của Claude Code.
+- `/mods stats` có thể thiếu vài lượt khi nhiều session cùng ghi một lúc.
+- Tự chọn model dùng thêm một lần gọi Haiku ở đầu mỗi lượt để phân loại câu hỏi, và có thể phân loại sai. Vì vậy mặc định tắt.
 - TL;DR gọi thêm Haiku nên tốn thêm một ít token. Tắt bằng `/mods tldr`.
