@@ -198,8 +198,13 @@ const SIMPLE_DANGER: readonly [RegExp, string][] = [
 ]
 
 const SEGMENT = /\r\n|\r|\n|&&|\|\||[;&|]/
-// Quotes and the edges of $(…), (…) and `…` come off each word.
-const bare = (word: string) => word.replace(/^(?:\$\(|\(|`|["'])+/, '').replace(/(?:\)|`|["'])+$/, '')
+// Each word as the shell runs it: quotes and backslashes removed anywhere in
+// it (\rm, r''m and "$HOME"/ are rm and $HOME/), then the edges of $(…), (…), `…`.
+const bare = (word: string) =>
+  word
+    .replace(/["'\\]/g, '')
+    .replace(/^(?:\$\(|\(|`)+/, '')
+    .replace(/(?:\)|`)+$/, '')
 const shellSegments = (command: string) =>
   command
     .split(SEGMENT)
@@ -239,12 +244,22 @@ function rmDanger(words: string[]) {
 }
 
 // `git [global options] <sub> <args>`: -C and -c take a value, other leading flags are skipped.
+const GIT_VALUE_OPTIONS = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--exec-path',
+])
+
 function gitCommand(words: string[]) {
   const at = words.findIndex(w => w === 'git' || w.endsWith('/git'))
   if (at < 0) return undefined
   for (let i = at + 1; i < words.length; i++) {
     const w = words[i] ?? ''
-    if (w === '-C' || w === '-c') i++
+    if (GIT_VALUE_OPTIONS.has(w)) i++
     else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1) }
   }
   return undefined
