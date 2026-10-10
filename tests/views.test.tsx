@@ -18,9 +18,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
       requestId: 'terminal-polish-settings',
       props: { title: 'Cài đặt', ...PANE_PROPS },
     })
-    expect((await ui.find({ key: 'set-sound' }))?.text).toContain('○ tắt')
+    expect((await ui.find({ key: 'dot-sound' }))?.text).toContain('○')
     await ui.press({ key: 'set-sound' })
-    expect((await ui.find({ key: 'set-sound' }))?.text).toContain('● bật')
+    expect((await ui.find({ key: 'dot-sound' }))?.text).toContain('◉')
     await ui.unmount()
   })
 
@@ -105,10 +105,10 @@ test('"Bật hết" turns every feature on in one write', async ($, on) => {
   })
   await ui.press({ key: 'all-on' })
   for (const key of ['sound', 'voice', 'autocompact', 'powerline']) {
-    expect((await ui.find({ key: `set-${key}` }))?.text).toContain('● bật')
+    expect((await ui.find({ key: `dot-${key}` }))?.text).toContain('◉')
   }
   // Experimental: never switched on in bulk.
-  expect((await ui.find({ key: 'set-automodel' }))?.text).toContain('○ tắt')
+  expect((await ui.find({ key: 'dot-automodel' }))?.text).toContain('○')
   await ui.unmount()
 })
 
@@ -121,9 +121,9 @@ test('the settings tab switches the theme', async ($, on) => {
     requestId: 'terminal-polish-settings',
     props: { title: 'Cài đặt', ...PANE_PROPS },
   })
-  expect((await ui.find({ key: 'theme-auto' }))?.text).toContain('● auto')
+  expect((await ui.find({ key: 'theme-auto' }))?.text).toContain('auto  (đang dùng)')
   await ui.press({ key: 'theme-dracula' })
-  expect((await ui.find({ key: 'theme-dracula' }))?.text).toContain('● dracula')
+  expect((await ui.find({ key: 'theme-dracula' }))?.text).toContain('dracula  (đang dùng)')
   await ui.unmount()
 })
 

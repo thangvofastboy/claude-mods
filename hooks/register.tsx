@@ -128,6 +128,32 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
+// The settings tab's groups; anything not listed falls into "Khác".
+const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
+  'Giao diện': [
+    'band',
+    'cards',
+    'decor',
+    'quota',
+    'gradient',
+    'powerline',
+    'meters',
+    'statecolor',
+    'fileicons',
+    'badges',
+    'collapse',
+    'splash',
+    'heatmap',
+    'hovercards',
+    'images',
+    'notices',
+  ],
+  'Hiệu ứng': ['anim', 'confetti', 'sound', 'voice'],
+  'An toàn': ['guard', 'secrets', 'budget', 'checkpoints', 'branchlock'],
+  'Tiện ích': ['tldr', 'notify', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos'],
+  'Tự động': ['format', 'autocheck'],
+  'Thử nghiệm': ['automodel'],
+}
 // Left out of "Bật hết": turned on one at a time, knowingly.
 const EXPERIMENTAL = new Set<keyof Settings>(['automodel'])
 
@@ -2869,7 +2895,9 @@ export const register: Register = on => {
     )
   })
 
-  // Settings tab: every feature one press away.
+  // Settings tab: every feature one press away, drawn in the active theme. Each
+  // group heading is a gradient, toggles show a colored dot and a bar, and the
+  // theme row shows every palette as a swatch.
   on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
     const P = await palette($)
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -2877,43 +2905,108 @@ export const register: Register = on => {
     const keys = Object.keys(SETTING_INFO) as (keyof Settings)[]
     const enabled = keys.filter(k => s[k]).length
     const current = await read($, theme)
+    const pct = Math.round((enabled / Math.max(1, keys.length)) * 100)
+    const bar = Math.max(10, Math.min(30, e.props.bodyColumns - 26))
+
+    const heading = (text: string) => (
+      <Box flexDirection="row" marginTop={1}>
+        {gradientRuns(text, P.grad).map(r => (
+          <Text color={r.color} bold>
+            {r.ch}
+          </Text>
+        ))}
+      </Box>
+    )
+
+    // Everything in one group or the catch-all "Khác": a new setting never goes missing.
+    const placed = new Set(Object.values(SETTING_GROUPS).flat())
+    const groups: [string, (keyof Settings)[]][] = [
+      ...Object.entries(SETTING_GROUPS).map(
+        ([title, list]) => [title, list.filter(k => k in SETTING_INFO)] as [string, (keyof Settings)[]],
+      ),
+      ['Khác', keys.filter(k => !placed.has(k))],
+    ]
 
     return (
-      <Box flexDirection="column" width={e.props.bodyColumns}>
-        <Text color={P.muted}>
-          {enabled}/{keys.length} đang bật · bấm để đổi · giữ qua các session
-        </Text>
-        <Box flexDirection="row" gap={1} marginBottom={1}>
+      <Box flexDirection="column" width={e.props.bodyColumns} paddingX={1}>
+        <Box flexDirection="row" gap={2}>
+          {gradientRuns('⚙ Cài đặt', P.grad).map(r => (
+            <Text color={r.color} bold>
+              {r.ch}
+            </Text>
+          ))}
+          <Text color={P.muted}>{`${enabled}/${keys.length} bật`}</Text>
+        </Box>
+        <Box flexDirection="row">
+          {meterCells(pct, bar, P).map(c => (
+            <Text color={c.color}>{c.ch}</Text>
+          ))}
+          <Text color={P.info}>{` ${pct}%`}</Text>
+        </Box>
+
+        <Box flexDirection="row" gap={1} marginTop={1}>
           <Button
             key="all-on"
-            label="Bật hết"
+            label="✦ Bật hết"
             dimColor
             onPress={() =>
               void setSettings($, Object.fromEntries(keys.filter(k => !EXPERIMENTAL.has(k)).map(k => [k, true])))
             }
           />
-          <Button key="defaults" label="Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
+          <Button key="defaults" label="↺ Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
         </Box>
-        <Box flexDirection="row" flexWrap="wrap" gap={1} marginBottom={1}>
-          <Text color={P.muted}>Theme:</Text>
-          {Object.keys(THEMES).map(name => (
-            <Button
-              key={`theme-${name}`}
-              label={name === current ? `● ${name}` : name}
-              dimColor={name !== current}
-              onPress={() => void setTheme($, name)}
-            />
+
+        {heading('Theme')}
+        {Object.keys(THEMES).map(name => {
+          const pal = THEMES[name] ?? AUTO
+          const isCurrent = name === current
+          return (
+            <Box flexDirection="row" gap={1}>
+              <Text color={isCurrent ? P.ok : P.muted}>{isCurrent ? '●' : '○'}</Text>
+              {pal.grad.map(c => (
+                <Text color={c}>{'██'}</Text>
+              ))}
+              <Button
+                key={`theme-${name}`}
+                label={isCurrent ? `${name}  (đang dùng)` : name}
+                plain
+                onPress={() => void setTheme($, name)}
+              />
+            </Box>
+          )
+        })}
+
+        {groups
+          .filter(([, list]) => list.length > 0)
+          .map(([title, list]) => (
+            <Box flexDirection="column">
+              {heading(`${title} · ${list.filter(k => s[k]).length}/${list.length}`)}
+              {list.map(k => {
+                const isOn = !!s[k]
+                const experimental = EXPERIMENTAL.has(k)
+                return (
+                  <Box flexDirection="row" gap={1}>
+                    <Box key={`dot-${k}`}>
+                      {' '}
+                      <Text color={isOn ? P.ok : P.muted} bold={isOn}>
+                        {isOn ? '◉' : '○'}
+                      </Text>
+                    </Box>
+                    <Button
+                      key={`set-${k}`}
+                      label={`${k.padEnd(12)}`}
+                      plain
+                      dimColor={!isOn}
+                      onPress={() => void setSetting($, k, !isOn)}
+                    />
+                    <Text color={experimental ? P.warn : isOn ? P.accent : P.muted} wrap="truncate-end">
+                      {`${experimental ? '⚗ ' : ''}${SETTING_INFO[k]}`}
+                    </Text>
+                  </Box>
+                )
+              })}
+            </Box>
           ))}
-        </Box>
-        {keys.map(k => (
-          <Button
-            key={`set-${k}`}
-            label={`${s[k] ? '● bật' : '○ tắt'}  ${k.padEnd(12)}${SETTING_INFO[k]}`}
-            plain
-            dimColor={!s[k]}
-            onPress={() => void setSetting($, k, !s[k])}
-          />
-        ))}
       </Box>
     )
   })
