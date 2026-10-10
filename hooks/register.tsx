@@ -74,6 +74,20 @@ const DANGER: readonly [RegExp, string][] = [
 const SECRET_FILE = /(^|\/)(\.env(\.[^/]*)?|id_rsa[^/]*|id_ed25519[^/]*|[^/]+\.pem)$/
 const SECRET_TEMPLATE = /\.env\.(example|sample|template)$/
 
+// A repository's own .git/config can name programs git runs (fsmonitor, an
+// external diff, a textconv, a pager): the mod runs git in whatever repo is
+// open, so every call turns those off rather than trust that config.
+const SAFE_GIT = [
+  'git',
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'core.pager=cat',
+  '--no-pager',
+] as const
+
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 function dangerOf(command: string) {
@@ -120,12 +134,12 @@ async function setPrompts($: EngineInterface, change: (list: string[]) => string
 // Never called from a render hook: rendering only reads what this wrote.
 async function refreshGit($: EngineInterface) {
   try {
-    const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+    const head = await $.process.run([...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
     if (head.exitCode !== 0) {
       await update($, git, () => null)
       return
     }
-    const status = await $.process.run(['git', 'status', '--porcelain'], { timeoutMs: 3000 })
+    const status = await $.process.run([...SAFE_GIT, 'status', '--porcelain'], { timeoutMs: 3000 })
     const changed = status.stdout.split('\n').filter(Boolean).length
     const value: Git = { branch: head.stdout.trim(), changed }
     await update($, git, () => value)
@@ -192,11 +206,16 @@ async function showDiff($: EngineInterface, path: string) {
   const dir = path.slice(0, path.lastIndexOf('/')) || '/'
   let value: Diff = { path, text: '', note: '' }
   try {
-    const run = await $.process.run(['git', '-C', dir, 'diff', 'HEAD', '--', path], { timeoutMs: 5000 })
+    const run = await $.process.run(
+      [...SAFE_GIT, '-C', dir, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', path],
+      { timeoutMs: 5000 },
+    )
     if (run.exitCode !== 0) {
       value = { ...value, note: 'Không lấy được diff (thư mục không phải git repo?).' }
     } else if (run.stdout.trim() === '') {
-      const tracked = await $.process.run(['git', '-C', dir, 'ls-files', '--error-unmatch', path], { timeoutMs: 3000 })
+      const tracked = await $.process.run([...SAFE_GIT, '-C', dir, 'ls-files', '--error-unmatch', path], {
+        timeoutMs: 3000,
+      })
       value = {
         ...value,
         note: tracked.exitCode === 0 ? 'Không có thay đổi so với HEAD.' : 'File mới, git chưa theo dõi.',

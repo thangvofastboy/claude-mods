@@ -94,4 +94,5 @@ scripts/release.sh   đánh tag và phát hành
 
 - Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code, không phải API chính thức; một bản cập nhật Claude Code có thể làm panel trống.
 - Mod vẽ **bên trong** giao diện Claude Code. Mod không tạo được cửa sổ riêng, tab hay chia khung kiểu terminal multiplexer, và không chuyển thẳng sang session khác được (dùng nút copy lệnh resume).
+- Bộ chặn lệnh là lớp bảo vệ **best-effort** bằng regex, không phải sandbox: nó bắt những cách viết phổ biến, nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đừng coi nó thay cho chế độ phân quyền của Claude Code.
 - TL;DR gọi thêm Haiku nên tốn thêm một ít token. Tắt bằng `/mods tldr`.
