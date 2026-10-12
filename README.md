@@ -4,12 +4,12 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-26%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-34%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-11-5b8def?style=for-the-badge)
 
 **Một lệnh `/mods`, cả chục thứ tiện lợi.**<br/>
-Dải trạng thái sống động · bảng điều khiển · 6 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
+Dải trạng thái sống động · bảng điều khiển · 11 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
 
 [🚀 Cài đặt](#-cài-đặt) ·
 [✨ Tính năng](#-tính-năng) ·
@@ -48,7 +48,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 
 | | Tính năng | Mô tả |
 | :-: | --- | --- |
-| 📟 | **Dải trạng thái** | `◆ dự-án ⎇ main ±3 │ ✓ 12s · 5 tool │ ctx ▰▰▰▱▱▱ 42% │ 5h 34% │ $0.31` ngay trên ô prompt, kèm các nút **Session · Bảng · Prompt · Cài đặt · Chọn · Ẩn**. |
+| 📟 | **Dải trạng thái** | Thẻ gọn ngay trên ô prompt: dòng 1 `◆ dự-án   ⎇ main ±3   ✓ 12s · 5 tool …… $0.31`, dòng 2 các thanh đo `ctx ▰▰▰▱▱▱ 42%   5h ▰▰▱▱▱▱ 34%`, dòng 3 phím tắt `s: Session · d: Bảng · p: Prompt · c: Cài đặt · v: Chọn · h: Ẩn`. Terminal hẹp thì ngắt giữa các mục, không cắt ngang một mục. |
 | 🟢 | **Viền theo trạng thái** | Xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước có lỗi. |
 | 🌈 | **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo được tô chuyển màu theo theme. |
 | ▰ | **Thanh đo màu** | Context, quota và ngân sách hiện dạng `▰▰▰▱▱▱`, chuyển dần từ xanh sang vàng rồi đỏ. |
@@ -56,11 +56,11 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; tự ẩn khi bạn gửi prompt đầu tiên. |
 | 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
 | 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
-| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ được đóng khung bo góc, dễ phân biệt với câu trả lời. |
+| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ có vạch màu ▌ bên trái, dễ phân biệt với câu trả lời mà không tốn thêm dòng. |
 | 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
-| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một thẻ có màu và viền theo loại hiện vài giây trên dải trạng thái. |
+| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một dòng có vạch màu theo loại hiện vài giây trên dải trạng thái. |
 | 🖱️ | **Rê chuột đổi màu** | Rê chuột lên dòng tool thì dòng đổi màu; bấm mới mở chi tiết. |
 
 ### 📊 Bảng điều khiển
@@ -196,7 +196,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | Tên | Mặc định | | Tên | Mặc định |
 | --- | :-: | --- | --- | :-: |
 | `band` dải trạng thái | ✅ | | `secrets` quét secret | ✅ |
-| `cards` khung tin nhắn | ✅ | | `budget` ngân sách | ✅ |
+| `cards` vạch màu tin nhắn | ✅ | | `budget` ngân sách | ✅ |
 | `tldr` tóm tắt câu trả lời | ✅ | | `checkpoints` lưu bản cũ | ✅ |
 | `notify` thông báo | ✅ | | `branchlock` khóa nhánh | ⬜ |
 | `sound` âm thanh | ⬜ | | `format` tự format | ⬜ |
@@ -254,7 +254,7 @@ hooks/
   hooks.json         khai báo module
   register.tsx       toàn bộ mod
 types/index.d.ts     kiểu dữ liệu của $.state
-tests/               dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, update
+tests/               khởi động, dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, poll, update
 assets/              banner, ảnh minh họa, logo
 sounds/done.wav      âm báo khi xong
 scripts/release.sh   đánh tag và phát hành
@@ -279,6 +279,28 @@ Không. Claude Code tự quyết vị trí: sidebar cạnh hội thoại khi ter
 </details>
 
 <details>
+<summary><b>Mod có làm Claude Code chậm đi không?</b></summary>
+
+Mod được viết để tốn ít nhất có thể:
+
+- **Khởi động:** mọi thứ cần nạp (cài đặt, dự án, git, usage, stats) chạy song song; `/reload-plugins` chỉ chờ phần chậm nhất là git.
+- **Không poll nền:** danh sách session và subagent chỉ được đọc khi bảng **Session** hoặc **Bảng** đang hiện.
+- **Không vẽ lại thừa:** giá trị không đổi (git, usage, chi tiêu, đồng hồ hẹn giờ…) thì không ghi lại, nên giao diện không bị vẽ lại vô ích.
+- **Mỗi prompt:** không đọc stats khi chưa đặt ngân sách, không tải từ viết tắt khi prompt không có `;`.
+- **Ảnh paste:** chỉ giữ ảnh của 20 tin nhắn gần nhất trong bộ nhớ.
+
+Muốn nhẹ hơn nữa, tắt những thứ tốn nhất:
+
+| Lệnh | Tiết kiệm |
+| --- | --- |
+| `/mods anim` | hiệu ứng vệt sáng (~12 khung hình/giây trong lúc Claude chạy) |
+| `/mods tldr` | lời gọi Haiku cuối mỗi câu trả lời dài (có thể giữ cuối lượt tới 8 giây) |
+| `/mods format`, `/mods autocheck` | chạy formatter / lệnh kiểm tra sau khi sửa file |
+| `/mods gradient` | mỗi ký tự tiêu đề là một phần tử màu riêng |
+
+</details>
+
+<details>
 <summary><b>Dải trạng thái biến mất?</b></summary>
 
 Transcript sẽ có một dòng mờ `terminal-polish: ui.render (AbovePrompt) refused: …` ghi lý do. Thử tắt `/mods anim` rồi `/mods statecolor` để khoanh vùng, hoặc bấm **Mặc định** trong tab cài đặt.
@@ -289,7 +311,7 @@ Transcript sẽ có một dòng mờ `terminal-polish: ui.render (AbovePrompt) r
 <summary><b>⚠️ Giới hạn đã biết</b></summary>
 
 - Bộ chặn lệnh và quét secret dựa trên mẫu (regex): bắt được các cách viết phổ biến nhưng vẫn lách được (tách cờ `rm -r -f`, bọc trong `sh -c`, dùng biến…). Đây là lưới an toàn, không thay cho chế độ phân quyền của Claude Code.
-- Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code; một bản cập nhật có thể làm panel trống.
+- Panel Sessions đọc `~/.claude/sessions/*.json`. Đây là định dạng nội bộ của Claude Code; một bản cập nhật có thể làm panel trống. Panel này và danh sách subagent chỉ được làm mới (3 giây/lần) khi bảng tương ứng đang hiện.
 - `format` chạy prettier **của chính dự án** (`node_modules/.bin/prettier`), tức là code do repo cung cấp; chỉ bật khi bạn tin repo đó.
 - Nút **Commit** không chạy git hooks; muốn chạy hooks thì bấm **Copy lệnh** rồi tự chạy.
 - `/mods stats` có thể thiếu vài lượt khi nhiều session cùng ghi một lúc.
