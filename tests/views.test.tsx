@@ -148,6 +148,8 @@ test('recent tools show short, marked labels and open in full on press', async (
   mock.clock(on)
   on('tool.call', () => ({ deny: 'test bottom' }))
   on('ui.toast', () => ({ value: undefined }))
+  // This test is about the row's label; held commands (blast) have their own test.
+  await $.command.run({ command: 'mods', args: 'blast', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   const command = 'pnpm --filter @shop/api run test:integration --reporter=verbose\nrm -rf build'
   await $.tool.call({ tool: 'Bash', command })
   const ui = await $.ui.mount({

@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-37%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-45%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-11-5b8def?style=for-the-badge)
 
@@ -52,7 +52,9 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 🟢 | **Viền theo trạng thái** | Xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước có lỗi. |
 | 🌈 | **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo được tô chuyển màu theo theme. |
 | ▰ | **Thanh đo màu** | Context, quota và ngân sách hiện dạng `▰▰▰▱▱▱`, chuyển dần từ xanh sang vàng rồi đỏ. |
+| ☂ | **Thời tiết context** | Thanh `ctx` có biểu tượng thời tiết theo độ đầy: ☀ dưới 25% · ☁ dưới 50% · ☂ dưới 75% · ☇ dưới 90% · ↯ sắp phải compact, kèm số token lượt trước vừa thêm (`+12k`). Tắt: `/mods weather`. |
 | ✨ | **Hiệu ứng** | Vệt sáng chạy ngang khi Claude đang làm; pháo hoa 🎉 khi test pass hoặc xong một việc dài không lỗi. |
+| 😄 | **Câu vui & dự báo hài** | Mỗi lượt một câu đùa dân code cạnh spinner (`Đang nghĩ · Code chạy được đừng hỏi tại sao`); màn chào có *dự báo hôm nay* (giữ nguyên cả ngày). `/mods vui` để xem thêm; tắt: `/mods fun`. |
 | 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; tự ẩn khi bạn gửi prompt đầu tiên. |
 | 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
 | 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
@@ -83,6 +85,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | | Tính năng | Mô tả |
 | :-: | --- | --- |
 | 🛑 | **Chặn lệnh nguy hiểm** | `rm -rf` lên `/`, `~`, `$HOME` (cả dạng `~/*`, `"$HOME"`, `-r -f`), force-push lên `main`/`master` (cả `-fu`, `+main`; vẫn cho `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, sửa `.env`, `*.pem`, `id_rsa*`. Áp dụng cho cả tool **Bash** lẫn **Monitor**. |
+| 💥 | **Xem trước lệnh rủi ro** | `rm -r`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore .` và force-push bị **giữ lại**: dải trạng thái liệt kê những gì sẽ mất (file và dung lượng sẽ xóa, file chưa commit, commit sẽ bị bỏ) rồi chờ bạn bấm **1** Chạy hoặc **2** Hủy (Enter = Hủy). Không ai trả lời sau 10 phút thì lệnh không chạy. Chỉ đo bằng lệnh đọc, không bao giờ chạy thử lệnh; đường dẫn có biến (`$DIR`), lệnh có `cd` trước hay remote là URL thì báo *không đo được* thay vì đoán. Lệnh của subagent có nhãn `[subagent]`, nhiều lệnh cùng lúc thì lần lượt từng cái. Phím 1/2 dùng khi ô prompt trống, không thì bấm chuột. Tắt: `/mods blast`. |
 | 🔐 | **Quét secret** | Prompt có API key (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWT, private key hay `password=…` sẽ bị giữ lại. Gửi lại với **`>>`** ở đầu nếu chắc chắn. |
 | ↩️ | **Checkpoint & hoàn tác** | Bản cũ của file được lưu trước mỗi lần Claude sửa; `/mods undo` để khôi phục. |
 | 🌿 | **Khóa nhánh** | *(tùy chọn)* chặn commit/push thẳng lên `main`, `master`, `production`. |
@@ -155,6 +158,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | `/mods handoff <session>` | 🤝 Bàn giao cho session khác |
 | `/mods copy [n]` | 📋 Copy khối code thứ n từ cuối |
 | `/mods timer <phút>` | ⏱ Hẹn giờ (không kèm số: hủy) |
+| `/mods vui` | 😄 Một câu đùa và dự báo hài cho hôm nay |
 | `/mods version` · `update` | 🔄 Phiên bản · cập nhật lên tag mới nhất |
 | `/mods <tên tính năng>` | 🔀 Bật/tắt một tính năng (xem bảng dưới) |
 
@@ -213,7 +217,9 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
 | `badges` badge tool | ✅ | | `heatmap` · `images` logo & thumbnail ảnh | ✅ |
 | `notices` thẻ thông báo màu | ✅ | | `hovercards` đổi màu khi rê chuột | ✅ |
-| `compact` dải trạng thái 1 hàng | ⬜ | | | |
+| `compact` dải trạng thái 1 hàng | ⬜ | | `weather` thời tiết context | ✅ |
+| `blast` xem trước lệnh rủi ro | ✅ | | `fun` câu vui & dự báo hài | ✅ |
+| `ctxwarn` nhắc /compact | ✅ | | | |
 
 ---
 
@@ -255,11 +261,13 @@ hooks/
   hooks.json         khai báo module
   register.tsx       toàn bộ mod
 types/index.d.ts     kiểu dữ liệu của $.state
-tests/               khởi động, dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, poll, update
+tests/               khởi động, /clear, xem trước lệnh rủi ro, thời tiết context, câu vui, dải trạng thái, panel, cài đặt, theme, TODO, badge, bộ chặn (Bash + Monitor), thông báo, notify_me, poll, update
 assets/              banner, ảnh minh họa, logo
 sounds/done.wav      âm báo khi xong
 scripts/release.sh   đánh tag và phát hành
 ```
+
+Ý tưởng *xem trước lệnh rủi ro* và *thời tiết context* lấy từ các mod mẫu của Anthropic ([`blast-radius`](https://github.com/anthropics/claude-code-playground/tree/main/claude-code/mods/blast-radius), [`token-weather`](https://github.com/anthropics/claude-code-playground/tree/main/claude-code/mods/token-weather)); mã ở đây được viết lại cho mod này.
 
 ---
 

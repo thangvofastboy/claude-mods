@@ -13,6 +13,9 @@ const PUSH = 'git ' + 'push'
 test('guard denies dangerous spellings and lets safe siblings through', async ($, on) => {
   on('tool.call', () => ({ deny: 'reached-bottom' }))
   on('ui.toast', () => ({ value: undefined }))
+  mock.store(on)
+  // This test is about the hard guard; held commands (blast) have their own test.
+  await $.command.run({ command: 'mods', args: 'blast', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
 
   for (const command of [
     `${PUSH} --force origin main`,
