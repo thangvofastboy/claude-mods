@@ -1893,6 +1893,64 @@ function haikuIdFor(model: string) {
   return id === base ? undefined : id
 }
 
+// Everything the mod keeps in $.store, copied into $.state. Run at session.start
+// and again after /clear, /resume and /branch, which reset $.state to its defaults
+// and do not fire session.start.
+async function loadSettingsAndTheme($: EngineInterface) {
+  try {
+    const [, savedTheme] = await Promise.all([loadSettings($), $.store.get('theme')])
+    if (typeof savedTheme === 'string' && savedTheme in THEMES) await update($, theme, () => savedTheme)
+  } catch {
+    // Defaults stay.
+  }
+}
+
+async function loadProject($: EngineInterface) {
+  try {
+    const rootPath = await $.session.root()
+    const pick = (all: unknown) => (all && typeof all === 'object' ? (all as Record<string, unknown>)[rootPath] : null)
+    const [allRules, savedTodos, savedNotes, savedChecks] = await Promise.all([
+      loadRules($),
+      $.store.get('todos'),
+      $.store.get('notes'),
+      $.store.get('checks'),
+      update($, root, () => rootPath),
+      update($, project, () => baseName(rootPath)),
+    ])
+    const list = allRules[rootPath]
+    const todoList = pick(savedTodos)
+    const noteList = pick(savedNotes)
+    const command = pick(savedChecks)
+    await Promise.all([
+      update($, rules, () => (Array.isArray(list) ? list : [])),
+      update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : [])),
+      update($, notes, () =>
+        Array.isArray(noteList) ? noteList.filter((x): x is string => typeof x === 'string') : [],
+      ),
+      update($, checkCommand, () => (typeof command === 'string' ? command : '')),
+    ])
+  } catch {
+    await update($, project, () => '').catch(() => undefined)
+  }
+}
+
+async function loadHome($: EngineInterface) {
+  try {
+    const homeDir = (await $.env.get('HOME')) ?? ''
+    const [stats] = await Promise.all([loadStats($), update($, home, () => homeDir)])
+    // One read of the stats feeds all three.
+    await Promise.all([refreshHeat($, stats), refreshSpend($, stats), buildSplash($, stats)])
+  } catch {
+    // No home: journal, checkpoints and the sessions list stay off.
+  }
+}
+
+// Side by side: a start or a reload waits for the slowest part, not for all in a row.
+const loadState = async ($: EngineInterface) => {
+  await loadSettingsAndTheme($)
+  await Promise.all([loadProject($), loadHome($)])
+}
+
 async function helpText($: EngineInterface) {
   const s = await read($, settings)
   const toggles = (Object.keys(SETTING_INFO) as (keyof Settings)[]).map(
@@ -1947,43 +2005,8 @@ export const register: Register = on => {
     } catch {
       void notice($, 'terminal-polish: không đăng ký được /mods')
     }
-    try {
-      const [, savedTheme] = await Promise.all([loadSettings($), $.store.get('theme')])
-      if (typeof savedTheme === 'string' && savedTheme in THEMES) await update($, theme, () => savedTheme)
-    } catch {
-      // Defaults stay.
-    }
-
     // Independent of each other: run side by side, so a start or a reload waits
     // for the slowest one (git), not for all of them in a row.
-    const loadProject = async () => {
-      try {
-        const rootPath = await $.session.root()
-        const pick = (all: unknown) => (all && typeof all === 'object' ? (all as Record<string, unknown>)[rootPath] : null)
-        const [allRules, savedTodos, savedNotes, savedChecks] = await Promise.all([
-          loadRules($),
-          $.store.get('todos'),
-          $.store.get('notes'),
-          $.store.get('checks'),
-          update($, root, () => rootPath),
-          update($, project, () => baseName(rootPath)),
-        ])
-        const list = allRules[rootPath]
-        const todoList = pick(savedTodos)
-        const noteList = pick(savedNotes)
-        const command = pick(savedChecks)
-        await Promise.all([
-          update($, rules, () => (Array.isArray(list) ? list : [])),
-          update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : [])),
-          update($, notes, () =>
-            Array.isArray(noteList) ? noteList.filter((x): x is string => typeof x === 'string') : [],
-          ),
-          update($, checkCommand, () => (typeof command === 'string' ? command : '')),
-        ])
-      } catch {
-        await update($, project, () => '').catch(() => undefined)
-      }
-    }
     const loadClock = async () => {
       await refreshUsage($)
       try {
@@ -2040,20 +2063,26 @@ export const register: Register = on => {
         // The rest of the mod runs without them.
       }
     }
-    const loadHome = async () => {
-      try {
-        const homeDir = (await $.env.get('HOME')) ?? ''
-        const [stats] = await Promise.all([loadStats($), update($, home, () => homeDir)])
-        // One read of the stats feeds all three.
-        await Promise.all([refreshHeat($, stats), refreshSpend($, stats), buildSplash($, stats), pollPanes($)])
-        $.clock.every(POLL_MS, () => void pollPanes($))
-      } catch {
-        // No sessions list; the rest of the mod runs.
-      }
-    }
-    await Promise.all([loadProject(), refreshGit($), loadClock(), loadTools(), loadHome()])
+    await Promise.all([loadState($), refreshGit($), loadClock(), loadTools()])
+    await pollPanes($)
+    $.clock.every(POLL_MS, () => void pollPanes($))
 
     return ran
+  })
+
+  // /clear, /resume and /branch put every $.state value back to its default and
+  // do not fire session.start: load what the store holds again. No greeting,
+  // no second poll timer; the new conversation's clock starts now.
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
+    try {
+      await Promise.all([loadState($), refreshGit($), refreshUsage($)])
+      const now = await $.clock.now()
+      const use = await read($, usage)
+      await Promise.all([update($, startedAt, () => now), update($, lastUsd, () => use?.usd ?? null)])
+    } catch {
+      // Defaults stay until the next start.
+    }
+    return next(e)
   })
 
   // From anyone but the person (another plugin's $.command.run), /mods only
