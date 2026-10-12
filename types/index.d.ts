@@ -18,6 +18,7 @@ export type Settings = {
   badges: boolean
   gradient: boolean
   powerline: boolean
+  compact: boolean
   meters: boolean
   statecolor: boolean
   fileicons: boolean
