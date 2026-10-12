@@ -90,7 +90,7 @@ const DEFAULTS: Settings = {
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
-  cards: 'khung thẻ cho tin nhắn của bạn',
+  cards: 'vạch màu bên trái tin nhắn của bạn',
   tldr: 'TL;DR dưới câu trả lời dài (tốn thêm token haiku)',
   notify: 'thông báo hệ điều hành khi lượt dài xong',
   sound: 'âm thanh khi lượt dài xong',
@@ -394,6 +394,12 @@ function duration(ms: number) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+// Every write redraws whatever reads the atom: hot writers skip a value that did not change.
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+// What every drawing starts from, in one round trip.
+const look = ($: EngineInterface) => Promise.all([palette($), read($, settings)])
+
 async function setSettings($: EngineInterface, patch: Partial<Settings>) {
   const next = await update($, settings, s => ({ ...s, ...patch }))
   await $.store.set('settings', next)
@@ -423,7 +429,7 @@ async function setPrompts($: EngineInterface, change: (list: string[]) => string
 async function refreshGit($: EngineInterface) {
   try {
     if (!(await gitIsSafe($))) {
-      await update($, git, () => null)
+      if (!same(await read($, git), null)) await update($, git, () => null)
       return
     }
     const [head, status] = await Promise.all([
@@ -431,14 +437,14 @@ async function refreshGit($: EngineInterface) {
       $.process.run([...SAFE_GIT, 'status', '--porcelain', '--ignore-submodules=all'], { timeoutMs: 3000 }),
     ])
     if (head.exitCode !== 0) {
-      await update($, git, () => null)
+      if (!same(await read($, git), null)) await update($, git, () => null)
       return
     }
     const changed = status.stdout.split('\n').filter(Boolean).length
     const value: Git = { branch: head.stdout.trim(), changed }
-    await update($, git, () => value)
+    if (!same(await read($, git), value)) await update($, git, () => value)
   } catch {
-    await update($, git, () => null)
+    if (!same(await read($, git), null)) await update($, git, () => null)
   }
 }
 
@@ -450,7 +456,7 @@ async function refreshUsage($: EngineInterface) {
       usd: u.cost?.usd ?? null,
       limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
     }
-    await update($, usage, () => value)
+    if (!same(await read($, usage), value)) await update($, usage, () => value)
   } catch {
     // Usage is decoration: the band simply leaves it out.
   }
@@ -479,12 +485,15 @@ async function refreshPeers($: EngineInterface, dir: string, selfId: string) {
       }
     }
     found.sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || a.name.localeCompare(b.name))
-    if (JSON.stringify(found) !== JSON.stringify(await read($, peers))) {
-      await update($, peers, () => found)
-    }
+    if (!same(await read($, peers), found)) await update($, peers, () => found)
   } catch {
-    await update($, peers, () => [])
+    if (!same(await read($, peers), [])) await update($, peers, () => [])
   }
+}
+
+const syncPeers = async ($: EngineInterface) => {
+  const dir = await read($, home)
+  if (dir) await refreshPeers($, `${dir}/.claude/sessions`, await $.session.id())
 }
 
 async function refreshAgents($: EngineInterface) {
@@ -492,11 +501,23 @@ async function refreshAgents($: EngineInterface) {
     const found: Agent[] = (await $.agent.list())
       .slice(-10)
       .map(a => ({ id: a.id, label: a.name ?? a.description ?? a.type, status: a.status }))
-    if (JSON.stringify(found) !== JSON.stringify(await read($, agents))) {
-      await update($, agents, () => found)
-    }
+    if (!same(await read($, agents), found)) await update($, agents, () => found)
   } catch {
     // No agents noun answer: leave the last list.
+  }
+}
+
+// The sessions list and the subagent rows are only drawn in their panes: poll
+// while one is in front, not all session long.
+export async function pollPanes($: EngineInterface) {
+  try {
+    const shown = new Set((await $.ui.panes()).filter(p => p.isShown).map(p => p.id))
+    await Promise.all([
+      shown.has(PEERS_PANE) ? syncPeers($) : undefined,
+      shown.has(DASH) ? refreshAgents($) : undefined,
+    ])
+  } catch {
+    // A missed round; the next tick tries again.
   }
 }
 
@@ -534,8 +555,14 @@ async function showDiff($: EngineInterface, path: string) {
   await $.ui.open({ id: DIFF_PANE, title: `Diff ${baseName(path)}` })
 }
 
-const openDash = ($: EngineInterface) => $.ui.open({ id: DASH, title: 'Hoạt động' })
-const openPeers = ($: EngineInterface) => $.ui.open({ id: PEERS_PANE, title: 'Sessions' })
+const openDash = ($: EngineInterface) => {
+  void refreshAgents($)
+  return $.ui.open({ id: DASH, title: 'Hoạt động' })
+}
+const openPeers = ($: EngineInterface) => {
+  void syncPeers($)
+  return $.ui.open({ id: PEERS_PANE, title: 'Sessions' })
+}
 const openPrompts = ($: EngineInterface) => $.ui.open({ id: PROMPTS_PANE, title: 'Prompt nhanh' })
 
 const placed = (opened: { isPlaced: boolean }, text: string) => ({
@@ -785,7 +812,7 @@ async function armTimer($: EngineInterface, endsAt: number) {
   const tick = async () => {
     const left = Math.max(0, Math.ceil((endsAt - (await $.clock.now())) / 60000))
     const value: TimerState = { endsAt, left }
-    await update($, timer, () => value)
+    if (!same(await read($, timer), value)) await update($, timer, () => value)
   }
   await tick()
   const now = await $.clock.now()
@@ -822,6 +849,7 @@ type ApiMsg = { role: string; content: { type: string; [field: string]: unknown 
 const IMAGE_TOKEN = /\[Image #\d+\]/g
 const IMAGE_MAX_BASE64 = (2 * 1024 * 1024 * 4) / 3 // Image takes 2 MiB decoded
 const picCache = new Map<string, Pic[]>()
+const PIC_CACHE_ROWS = 20
 const unTokened = (text: string) => text.replace(IMAGE_TOKEN, '').replace(/\s+/g, ' ').trim()
 
 async function picsFor($: EngineInterface, rowId: string, text: string): Promise<Pic[]> {
@@ -829,7 +857,11 @@ async function picsFor($: EngineInterface, rowId: string, text: string): Promise
   if (cached) return cached
   if (!text.includes('[Image #')) return []
   const pics = matchPics(await $.session.messages({ as: 'api' }).catch(() => []), text)
-  if (pics.length) picCache.set(rowId, pics) // misses not cached: the row may draw before its message is stored
+  if (pics.length) {
+    picCache.set(rowId, pics) // misses not cached: the row may draw before its message is stored
+    // Each entry holds the images' base64 (up to MBs): keep the newest rows only.
+    if (picCache.size > PIC_CACHE_ROWS) picCache.delete(picCache.keys().next().value ?? '')
+  }
   return pics
 }
 
@@ -1194,11 +1226,14 @@ const hexNum = (hex: string) => Number.parseInt(hex.replace('#', ''), 16)
 
 function packCells(cells: readonly (readonly [number, number, number])[]) {
   const words = new Uint32Array(cells.length * 3)
-  cells.forEach(([glyph, fg, bg], i) => words.set([glyph, fg, bg], i * 3))
-  const bytes = new Uint8Array(words.buffer)
-  let binary = ''
-  for (const b of bytes) binary += String.fromCharCode(b)
-  return btoa(binary)
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]
+    if (!cell) continue
+    words[i * 3] = cell[0]
+    words[i * 3 + 1] = cell[1]
+    words[i * 3 + 2] = cell[2]
+  }
+  return btoa(String.fromCharCode(...new Uint8Array(words.buffer)))
 }
 
 const COMET_TAIL = 10
@@ -1249,7 +1284,7 @@ function stopFx() {
 
 async function startFx($: EngineInterface, mode: 'comet' | 'party') {
   const [s, P] = await Promise.all([read($, settings), palette($)])
-  if ((mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
+  if (!s.band || (mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
   // Stop and start with no await between, so two overlapping calls cannot both
   // leave a timer running.
   stopFx()
@@ -1313,7 +1348,7 @@ async function refreshHeat($: EngineInterface, loaded?: Stats) {
   const value = Object.fromEntries(
     Object.entries(stats).map(([day, rows]) => [day, Object.values(rows).reduce((n, r) => n + r.turns, 0)]),
   )
-  await update($, heat, () => value)
+  if (!same(await read($, heat), value)) await update($, heat, () => value)
 }
 
 // Columns are weeks ending this week, rows Sunday..Saturday; null past today.
@@ -1348,13 +1383,13 @@ const TIPS = [
   '/mods stats xem bạn đã tiêu bao nhiêu tuần này.',
 ]
 
-async function buildSplash($: EngineInterface) {
+async function buildSplash($: EngineInterface, loaded?: Stats) {
   const now = await $.clock.now()
   const hour = new Date(now).getHours()
   const greet =
     hour < 11 ? 'Chào buổi sáng' : hour < 14 ? 'Chào buổi trưa' : hour < 18 ? 'Chào buổi chiều' : 'Chào buổi tối'
   const who = baseName(await read($, home)) || 'bạn'
-  const stats = await loadStats($)
+  const stats = loaded ?? (await loadStats($))
   const today = localDay(now)
   const prev = Object.keys(stats)
     .filter(d => d < today)
@@ -1379,13 +1414,6 @@ async function buildSplash($: EngineInterface) {
 
 // ================================================================ productivity
 // ---- per-project lists kept in $.store under the project root
-async function loadProjectList($: EngineInterface, key: string): Promise<string[]> {
-  const raw = await $.store.get(key)
-  const all = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-  const list = all[await read($, root)]
-  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : []
-}
-
 async function saveProjectValue($: EngineInterface, key: string, value: unknown) {
   const raw = await $.store.get(key)
   const all = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {}
@@ -1397,10 +1425,10 @@ async function saveProjectValue($: EngineInterface, key: string, value: unknown)
 async function refreshSpend($: EngineInterface, loaded?: Stats) {
   const stats = loaded ?? (await loadStats($))
   const today = Object.values(stats[localDay(await $.clock.now())] ?? {}).reduce((n, r) => n + r.usd, 0)
-  await update($, spentToday, () => today)
+  if (!same(await read($, spentToday), today)) await update($, spentToday, () => today)
   const raw = await $.store.get('budget')
   const limit = typeof raw === 'number' && raw > 0 ? raw : 0
-  await update($, budgetLimit, () => limit)
+  if (!same(await read($, budgetLimit), limit)) await update($, budgetLimit, () => limit)
 }
 
 async function budgetCommand($: EngineInterface, rest: string) {
@@ -1747,6 +1775,7 @@ async function standupText($: EngineInterface) {
 // ---- handoff (49): a summary of this session sent to another one
 async function handoffCommand($: EngineInterface, rest: string) {
   if (!rest) return 'Cách dùng: /mods handoff <tên hoặc id session> (xem /mods sessions)'
+  await syncPeers($)
   const target = (await read($, peers)).find(
     p => !p.isSelf && (p.name === rest || p.id.startsWith(rest) || p.name.startsWith(rest)),
   )
@@ -1916,97 +1945,110 @@ export const register: Register = on => {
       void notice($, 'terminal-polish: không đăng ký được /mods')
     }
     try {
-      await loadSettings($)
-      const savedTheme = await $.store.get('theme')
+      const [, savedTheme] = await Promise.all([loadSettings($), $.store.get('theme')])
       if (typeof savedTheme === 'string' && savedTheme in THEMES) await update($, theme, () => savedTheme)
     } catch {
       // Defaults stay.
     }
-    try {
-      await update($, project, () => '')
-      const rootPath = await $.session.root()
-      await update($, root, () => rootPath)
-      await update($, project, () => baseName(rootPath))
-      const all = await loadRules($)
-      const list = Array.isArray(all[rootPath]) ? all[rootPath] : []
-      await update($, rules, () => list)
-      const savedTodos = await $.store.get('todos')
-      const todoList =
-        savedTodos && typeof savedTodos === 'object' ? (savedTodos as Record<string, unknown>)[rootPath] : null
-      await update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : []))
-      const savedNotes = await loadProjectList($, 'notes')
-      await update($, notes, () => savedNotes)
-      const savedChecks = await $.store.get('checks')
-      const command =
-        savedChecks && typeof savedChecks === 'object' ? (savedChecks as Record<string, unknown>)[rootPath] : ''
-      await update($, checkCommand, () => (typeof command === 'string' ? command : ''))
-    } catch {
-      // The band falls back to its own label.
-    }
-    await refreshGit($)
-    await refreshUsage($)
-    try {
-      const now = await $.clock.now()
-      // First load of this session (a hot reload keeps startedAt): greet once.
-      if ((await read($, startedAt)) === 0) await update($, splash, () => true)
-      await update($, startedAt, t => t || now)
-      await update($, lastUsd, () => null)
-      const use = await read($, usage)
-      await update($, lastUsd, () => use?.usd ?? null)
-      const t = await read($, timer)
-      if (t && t.endsAt > now) await armTimer($, t.endsAt)
-      else if (t) {
-        await update($, timer, () => null)
-        await notice($, '⏰ Hết giờ! (trong lúc nạp lại)')
+
+    // Independent of each other: run side by side, so a start or a reload waits
+    // for the slowest one (git), not for all of them in a row.
+    const loadProject = async () => {
+      try {
+        const rootPath = await $.session.root()
+        const pick = (all: unknown) => (all && typeof all === 'object' ? (all as Record<string, unknown>)[rootPath] : null)
+        const [allRules, savedTodos, savedNotes, savedChecks] = await Promise.all([
+          loadRules($),
+          $.store.get('todos'),
+          $.store.get('notes'),
+          $.store.get('checks'),
+          update($, root, () => rootPath),
+          update($, project, () => baseName(rootPath)),
+        ])
+        const list = allRules[rootPath]
+        const todoList = pick(savedTodos)
+        const noteList = pick(savedNotes)
+        const command = pick(savedChecks)
+        await Promise.all([
+          update($, rules, () => (Array.isArray(list) ? list : [])),
+          update($, todos, () => (Array.isArray(todoList) ? (todoList as Todo[]) : [])),
+          update($, notes, () =>
+            Array.isArray(noteList) ? noteList.filter((x): x is string => typeof x === 'string') : [],
+          ),
+          update($, checkCommand, () => (typeof command === 'string' ? command : '')),
+        ])
+      } catch {
+        await update($, project, () => '').catch(() => undefined)
       }
-    } catch {
-      // Stats and the timer start fresh.
     }
-    try {
-      if ((await read($, settings)).tools) {
-        await $.tool.register({
-          name: 'notify_me',
-          description:
-            'Notify the user right away (a desktop notification and a toast) when you need their decision or finished a long task they may not be watching. Use sparingly.',
-          inputSchema: {
-            type: 'object',
-            properties: { message: { type: 'string', description: 'One short sentence for the user' } },
-            required: ['message'],
-          },
-          isDeferred: false,
-        })
-        await $.agent.register({
-          name: 'reviewer',
-          description: 'Reviews a diff or files for bugs, security issues and needless complexity; read-only.',
-          prompt: REVIEWER_PROMPT,
-          tools: ['Read', 'Grep', 'Glob', 'Bash'],
-        })
-        await $.agent.register({
-          name: 'tester',
-          description: 'Writes and runs the smallest tests for a change and reports the evidence.',
-          prompt: TESTER_PROMPT,
-          tools: ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write'],
-        })
+    const loadClock = async () => {
+      await refreshUsage($)
+      try {
+        const [now, began, use, t] = await Promise.all([
+          $.clock.now(),
+          read($, startedAt),
+          read($, usage),
+          read($, timer),
+        ])
+        // First load of this session (a hot reload keeps startedAt): greet once.
+        await Promise.all([
+          began === 0 ? update($, splash, () => true) : undefined,
+          update($, startedAt, x => x || now),
+          update($, lastUsd, () => use?.usd ?? null),
+        ])
+        if (t && t.endsAt > now) await armTimer($, t.endsAt)
+        else if (t) {
+          await update($, timer, () => null)
+          await notice($, '⏰ Hết giờ! (trong lúc nạp lại)')
+        }
+      } catch {
+        // Stats and the timer start fresh.
       }
-    } catch {
-      // The rest of the mod runs without them.
     }
-    try {
-      const homeDir = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
-      await update($, home, () => homeDir)
-      await refreshHeat($)
-      await refreshSpend($)
-      await buildSplash($)
-      const selfId = await $.session.id()
-      const dir = `${homeDir}/.claude/sessions`
-      await refreshPeers($, dir, selfId)
-      $.clock.every(POLL_MS, () => {
-        void refreshPeers($, dir, selfId)
-        void refreshAgents($)
-      })
-    } catch {
-      // No sessions list; the rest of the mod runs.
+    const loadTools = async () => {
+      try {
+        if (!(await read($, settings)).tools) return
+        await Promise.all([
+          $.tool.register({
+            name: 'notify_me',
+            description:
+              'Notify the user right away (a desktop notification and a toast) when you need their decision or finished a long task they may not be watching. Use sparingly.',
+            inputSchema: {
+              type: 'object',
+              properties: { message: { type: 'string', description: 'One short sentence for the user' } },
+              required: ['message'],
+            },
+            isDeferred: false,
+          }),
+          $.agent.register({
+            name: 'reviewer',
+            description: 'Reviews a diff or files for bugs, security issues and needless complexity; read-only.',
+            prompt: REVIEWER_PROMPT,
+            tools: ['Read', 'Grep', 'Glob', 'Bash'],
+          }),
+          $.agent.register({
+            name: 'tester',
+            description: 'Writes and runs the smallest tests for a change and reports the evidence.',
+            prompt: TESTER_PROMPT,
+            tools: ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write'],
+          }),
+        ])
+      } catch {
+        // The rest of the mod runs without them.
+      }
     }
+    const loadHome = async () => {
+      try {
+        const homeDir = (await $.env.get('HOME')) ?? ''
+        const [stats] = await Promise.all([loadStats($), update($, home, () => homeDir)])
+        // One read of the stats feeds all three.
+        await Promise.all([refreshHeat($, stats), refreshSpend($, stats), buildSplash($, stats), pollPanes($)])
+        $.clock.every(POLL_MS, () => void pollPanes($))
+      } catch {
+        // No sessions list; the rest of the mod runs.
+      }
+    }
+    await Promise.all([loadProject(), refreshGit($), loadClock(), loadTools(), loadHome()])
 
     return ran
   })
@@ -2138,11 +2180,15 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
-    await update($, turn, () => value)
-    await update($, autoModel, () => null)
-    await update($, splash, () => false)
-    if ((await read($, fx)) !== 'party') void startFx($, 'comet')
-    if ((await read($, settings)).automodel && e.text.trim()) {
+    const [, , , effect, s] = await Promise.all([
+      update($, turn, () => value),
+      update($, autoModel, () => null),
+      update($, splash, () => false),
+      read($, fx),
+      read($, settings),
+    ])
+    if (effect !== 'party') void startFx($, 'comet')
+    if (s.automodel && e.text.trim()) {
       try {
         const label = await $.model.classify(
           e.text.slice(0, 4000),
@@ -2184,7 +2230,10 @@ export const register: Register = on => {
     // Every prompt that starts a turn spends: /loop, panes and remote ones too,
     // a background task's notification excepted. Today's spend is re-read here,
     // so a limit hit yesterday does not hold this morning's prompts.
-    if (!isForced && s.budget && kind !== 'task-notification') {
+    // The limit is read from the store (another session may have set it); the
+    // stats only when there is one.
+    const budget = !isForced && s.budget && kind !== 'task-notification' ? await $.store.get('budget') : 0
+    if (typeof budget === 'number' && budget > 0) {
       await refreshSpend($)
       const [limit, spent] = await Promise.all([read($, budgetLimit), read($, spentToday)])
       if (limit > 0 && spent >= limit) {
@@ -2193,7 +2242,7 @@ export const register: Register = on => {
         }
       }
     }
-    if (s.abbrev && kind === 'composer') text = expandAbbrevs(text, await loadAbbrevs($))
+    if (s.abbrev && kind === 'composer' && text.includes(';')) text = expandAbbrevs(text, await loadAbbrevs($))
     return next(text === e.text ? e : { ...e, text })
   }).catch(($, e, next) => {
     // A fault holds a typed prompt back (>> still sends it) rather than skip the checks.
@@ -2213,9 +2262,8 @@ export const register: Register = on => {
 
   // Project rules (17): appended to the system prompt, last.
   on('prompt.compose', async ($, e, next) => {
-    const ran = await next(e)
-    const list = await read($, rules)
-    if (!(await read($, settings)).rules || list.length === 0) return ran
+    const [ran, list, s] = await Promise.all([next(e), read($, rules), read($, settings)])
+    if (!s.rules || list.length === 0) return ran
     return {
       ...ran,
       sections: [
@@ -2312,10 +2360,14 @@ export const register: Register = on => {
     let began = 0
     let pointId: number | undefined
     try {
-      began = await $.clock.now()
-      await update($, calls, list => [...list, call].slice(-100))
-      await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
-      if (path && e.tool !== 'Read' && (await read($, settings)).checkpoints) pointId = await snapshot($, path)
+      const [now, , , s] = await Promise.all([
+        $.clock.now(),
+        update($, calls, list => [...list, call].slice(-100)),
+        update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t)),
+        read($, settings),
+      ])
+      began = now
+      if (path && e.tool !== 'Read' && s.checkpoints) pointId = await snapshot($, path)
     } catch {
       // The row is only display.
     }
@@ -2331,18 +2383,20 @@ export const register: Register = on => {
         void notice($, '🎉 Test pass!')
         void startFx($, 'party')
       }
-      await update($, calls, list =>
-        list.map(one =>
-          one.id === call.id ? { ...one, state: isFailed ? ('fail' as const) : ('ok' as const), ms: elapsed } : one,
+      const isEdit = !isFailed && !!path && e.tool !== 'Read'
+      const [, , , s] = await Promise.all([
+        update($, calls, list =>
+          list.map(one =>
+            one.id === call.id ? { ...one, state: isFailed ? ('fail' as const) : ('ok' as const), ms: elapsed } : one,
+          ),
         ),
-      )
-      if (isFailed) {
-        await update($, turn, t => (t ? { ...t, failed: t.failed + 1 } : t))
-      }
-      if (!isFailed && path && e.tool !== 'Read') {
-        await update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30))
-        await update($, turn, t => (t ? { ...t, edits: t.edits + 1 } : t))
-        const s = await read($, settings)
+        isFailed || isEdit
+          ? update($, turn, t => (t ? { ...t, failed: t.failed + (isFailed ? 1 : 0), edits: t.edits + (isEdit ? 1 : 0) } : t))
+          : undefined,
+        isEdit && path ? update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30)) : undefined,
+        read($, settings),
+      ])
+      if (isEdit && path) {
         if (s.format) await formatFile($, path)
         if (s.todos) {
           const written = e.tool === 'Edit' ? e.new_string : e.tool === 'Write' ? e.content : ''
@@ -2359,8 +2413,21 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     const ran = await next(e)
-    const s = await read($, settings)
-    const t = await read($, turn)
+    const [s, t] = await Promise.all([read($, settings), read($, turn)])
+    // Asked first, so Haiku answers while the bookkeeping below runs, not after it.
+    const tldr =
+      s.tldr && e.reason === 'answer' && !e.isAborted && e.answer.length >= TLDR_MIN_CHARS
+        ? $.model
+            .complete({
+              model: 'haiku',
+              maxTokens: 200,
+              timeoutMs: 8000,
+              system:
+                'Tóm tắt câu trả lời sau trong tối đa hai câu ngắn, cùng ngôn ngữ với nó. Chỉ viết phần tóm tắt, không mở đầu.',
+              prompt: e.answer.slice(0, 20000),
+            })
+            .catch(() => undefined)
+        : undefined
     const done: LastTurn = { seconds: Math.round(e.durationMs / 1000), tools: t?.tools ?? 0, failed: t?.failed ?? 0 }
     try {
       if (s.todos && e.reason === 'answer') await addTodos($, todosIn(e.answer))
@@ -2368,10 +2435,12 @@ export const register: Register = on => {
     } catch {
       // Extras never hold the turn up.
     }
-    await update($, last, () => done)
-    await update($, history, list => [...list, done].slice(-20))
-    await update($, turn, () => null)
-    await update($, autoModel, () => null)
+    await Promise.all([
+      update($, last, () => done),
+      update($, history, list => [...list, done].slice(-20)),
+      update($, turn, () => null),
+      update($, autoModel, () => null),
+    ])
     await endFx($, 'comet')
     if (done.seconds >= TOAST_SECONDS && done.failed === 0 && !e.isAborted) void startFx($, 'party')
     await update($, totals, x => ({
@@ -2424,31 +2493,19 @@ export const register: Register = on => {
       // Stats are best effort.
     }
 
-    if (s.tldr && e.reason === 'answer' && !e.isAborted && e.answer.length >= TLDR_MIN_CHARS) {
-      const reply = await $.model.complete({
-        model: 'haiku',
-        maxTokens: 200,
-        timeoutMs: 8000,
-        system:
-          'Tóm tắt câu trả lời sau trong tối đa hai câu ngắn, cùng ngôn ngữ với nó. Chỉ viết phần tóm tắt, không mở đầu.',
-        prompt: e.answer.slice(0, 20000),
-      })
-      if (reply.isAnswered && reply.text.trim()) {
-        return { ...ran, text: `TL;DR: ${reply.text.trim()}` }
-      }
-    }
-
-    return ran
+    const reply = await tldr
+    return reply?.isAnswered && reply.text.trim() ? { ...ran, text: `TL;DR: ${reply.text.trim()}` } : ran
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const P = await palette($)
-    const s = await read($, settings)
+    const [P, s] = await look($)
     if (e.props.hasSurvey || !s.band) {
+      // Nothing of ours is drawn: the effect timer has nowhere to paint.
+      bandSite = null
       return next(e)
     }
-    const { Box, Text, Button } = $.ui.resolve(e)
     const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
     const Raster = 'Raster' in t ? t.Raster : undefined
     const Image = 'Image' in t ? t.Image : undefined
     // One round trip for everything the band draws, not one per value.
@@ -2467,6 +2524,7 @@ export const register: Register = on => {
       spent,
       checked,
       todoList,
+      cards,
     ] = await Promise.all([
       read($, project),
       read($, git),
@@ -2482,8 +2540,8 @@ export const register: Register = on => {
       read($, spentToday),
       read($, check),
       read($, todos),
+      s.notices ? read($, notices) : [],
     ])
-    const cards = s.notices ? await read($, notices) : []
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
@@ -2496,7 +2554,7 @@ export const register: Register = on => {
     const stateColor = working ? P.warn : prev && prev.failed > 0 ? P.err : P.ok
 
     // Segments: [text, role color]; drawn plain or as powerline blocks.
-    type Segment = { text: string; color: string; meter?: { pct: number } }
+    type Segment = { text: string; color: string; meter?: { pct: number }; right?: true }
     const segments: Segment[] = []
     if (repo)
       segments.push({ text: `⎇ ${repo.branch}${repo.changed > 0 ? ` ±${repo.changed}` : ' ✓'}`, color: P.violet })
@@ -2513,7 +2571,7 @@ export const register: Register = on => {
     if (pct !== null) segments.push({ text: 'ctx', color: P.info, meter: { pct } })
     for (const l of limits)
       segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
-    if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink })
+    if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink, right: true })
     if (s.budget && limit > 0) {
       segments.push({
         text: `💰 $${spent.toFixed(2)}/$${limit.toFixed(0)}`,
@@ -2566,24 +2624,58 @@ export const register: Register = on => {
         <Text color={segments[segments.length - 1]?.color ?? P.accent}>{POWER}</Text>
       </Box>
     ) : (
-      <Box flexDirection="row" flexWrap="wrap" flexShrink={1}>
-        {title}
-        {segments.map(seg => [
-          <Text color={P.muted}>{'  │ '}</Text>,
-          <Text color={seg.color}>{label(seg)}</Text>,
-          ...meterRuns(seg),
-        ])}
+      // Two lines: who and what (cost at the right edge), then the gauges.
+      // Each chip is its own Box, so a narrow terminal wraps between chips, never inside one.
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
+          <Box flexDirection="row" flexWrap="wrap" flexShrink={1} columnGap={3}>
+            <Box flexDirection="row">{title}</Box>
+            {segments
+              .filter(seg => !seg.meter && !seg.right)
+              .map(seg => (
+                <Text color={seg.color}>{seg.text}</Text>
+              ))}
+          </Box>
+          {segments
+            .filter(seg => seg.right)
+            .map(seg => (
+              <Text color={seg.color} bold>
+                {seg.text}
+              </Text>
+            ))}
+        </Box>
+        {segments.some(seg => seg.meter) && (
+          <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+            {segments
+              .filter(seg => seg.meter)
+              .map(seg => (
+                <Box flexDirection="row">
+                  <Text color={P.muted}>{label(seg)}</Text>
+                  {meterRuns(seg)}
+                </Box>
+              ))}
+          </Box>
+        )}
       </Box>
     )
 
+    // A key row, survey style (`s: Session`), dim until pointed at.
+    const keys: [string, string, string, () => unknown][] = [
+      ['sessions', 'Session', 's', () => void openPeers($)],
+      ['dash', 'Bảng', 'd', () => void openDash($)],
+      ['prompts', 'Prompt', 'p', () => void openPrompts($)],
+      ['settings', 'Cài đặt', 'c', () => void openSettings($)],
+      ['sel', 'Chọn', 'v', () => void grabSelection($)],
+      ['hide', 'Ẩn', 'h', () => setSetting($, 'band', false)],
+    ]
     const buttons = (
-      <Box flexDirection="row" flexWrap="wrap" gap={1}>
-        <Button key="sessions" label="Session" hotkey="s" dimColor onPress={() => void openPeers($)} />
-        <Button key="dash" label="Bảng" hotkey="d" dimColor onPress={() => void openDash($)} />
-        <Button key="prompts" label="Prompt" hotkey="p" dimColor onPress={() => void openPrompts($)} />
-        <Button key="settings" label="Cài đặt" hotkey="c" dimColor onPress={() => void openSettings($)} />
-        <Button key="sel" label="Chọn" hotkey="v" dimColor onPress={() => void grabSelection($)} />
-        <Button key="hide" label="Ẩn" hotkey="h" dimColor onPress={() => setSetting($, 'band', false)} />
+      <Box flexDirection="row" flexWrap="wrap">
+        {keys.map(([key, text, hotkey, onPress], i) => (
+          <Box flexDirection="row">
+            {i > 0 ? <Text color={P.muted}>{' · '}</Text> : null}
+            <Button key={key} label={text} hotkey={hotkey} plain dimColor onPress={onPress} />
+          </Box>
+        ))}
       </Box>
     )
 
@@ -2634,46 +2726,42 @@ export const register: Register = on => {
         width={e.props.bodyColumns}
         {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
       >
-        {cards.map(n => {
-          const color = P[n.kind]
-          return (
-            <Box
-              key={`notice-${n.id}`}
-              flexDirection="row"
-              gap={1}
-              borderStyle="round"
-              borderColor={color}
-              paddingX={1}
-            >
-              <Text>{n.icon}</Text>
-              <Text color={color} bold wrap="wrap">
-                {n.text}
-              </Text>
-            </Box>
-          )
-        })}
+        {/* Notices: one line each behind a bar in their color, not a boxed card. */}
+        {cards.length > 0 && (
+          <Box flexDirection="column" marginBottom={1}>
+            {cards.map(n => (
+              <Box key={`notice-${n.id}`} flexDirection="row" gap={1}>
+                <Text color={P[n.kind]}>▌</Text>
+                <Text>{n.icon}</Text>
+                <Text color={P[n.kind]} bold wrap="wrap">
+                  {n.text}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        )}
         {welcome}
-        <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-          {status}
-          {buttons}
-        </Box>
+        {status}
+        {buttons}
         {strip}
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: DASH }, async ($, e) => {
-    const P = await palette($)
-    const s = await read($, settings)
+    const [P, s] = await look($)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const list = await read($, calls)
-    const touched = await read($, files)
-    const repo = await read($, git)
-    const subs = await read($, agents)
-    const turns = await read($, history)
-    const counts = await read($, heat)
-    const opened = await read($, openCalls)
-    const now = await $.clock.now()
+    const [list, touched, repo, subs, turns, counts, opened, now] = await Promise.all([
+      read($, calls),
+      read($, files),
+      read($, git),
+      read($, agents),
+      read($, history),
+      read($, heat),
+      read($, openCalls),
+      $.clock.now(),
+    ])
+    const slowest = Math.max(1, ...turns.map(x => x.seconds))
     const room = Math.max(3, (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - subs.length)
     const HEAT = [P.muted, ...[0.15, 0.5, 0.8, 1].map(t => colorAt(P.grad, t))]
 
@@ -2721,14 +2809,11 @@ export const register: Register = on => {
           <Box flexDirection="column">
             {heading(`Tốc độ ${turns.length} lượt gần đây`)}
             <Box flexDirection="row">
-              {turns.map((t, i) => {
-                const max = Math.max(1, ...turns.map(x => x.seconds))
-                return (
-                  <Text color={t.failed > 0 ? P.err : colorAt(P.grad, i / Math.max(1, turns.length - 1))}>
-                    {BARS[Math.min(7, Math.floor((t.seconds / max) * 7))] ?? ''}
-                  </Text>
-                )
-              })}
+              {turns.map((t, i) => (
+                <Text color={t.failed > 0 ? P.err : colorAt(P.grad, i / Math.max(1, turns.length - 1))}>
+                  {BARS[Math.min(7, Math.floor((t.seconds / slowest) * 7))] ?? ''}
+                </Text>
+              ))}
               <Text color={P.muted}> max {Math.max(...turns.map(t => t.seconds))}s</Text>
             </Box>
           </Box>
@@ -2784,12 +2869,17 @@ export const register: Register = on => {
                       wrap="truncate-end"
                       hover={s.hovercards ? { inverse: true } : undefined}
                     >
-                      {`${ICON[call.state]} ${call.tool}  ${short.head}`}
+                      {`${ICON[call.state]} ${call.tool.padEnd(5)} ${short.head}`}
                     </Text>
                     {/* Its own element, never shrunk: a narrow pane cuts the label, not this. */}
                     {short.marker ? (
                       <Box flexShrink={0}>
                         <Text color={P.warn}>{short.marker}</Text>
+                      </Box>
+                    ) : null}
+                    {call.ms != null ? (
+                      <Box flexShrink={0}>
+                        <Text color={P.muted}>{`${(call.ms / 1000).toFixed(1)}s`}</Text>
                       </Box>
                     ) : null}
                     {
@@ -2962,12 +3052,10 @@ export const register: Register = on => {
   // group heading is a gradient, toggles show a colored dot and a bar, and the
   // theme row shows every palette as a swatch.
   on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
-    const P = await palette($)
+    const [[P, s], current] = await Promise.all([look($), read($, theme)])
     const { Box, Text, Button } = $.ui.resolve(e)
-    const s = await read($, settings)
     const keys = Object.keys(SETTING_INFO) as (keyof Settings)[]
     const enabled = keys.filter(k => s[k]).length
-    const current = await read($, theme)
     const pct = Math.round((enabled / Math.max(1, keys.length)) * 100)
     const bar = Math.max(10, Math.min(30, e.props.bodyColumns - 26))
 
@@ -3333,7 +3421,6 @@ export const register: Register = on => {
 
   // Collapse (24): a long Bash output shows its head and a press to open it.
   on('ui.render', { component: 'ToolResult', props: { tool: 'Bash' } }, async ($, e, next) => {
-    const P = await palette($)
     if (!(await read($, settings)).collapse || e.props.isErrored) return next(e)
     const out = e.props.output as { stdout?: unknown } | undefined
     const lines = typeof out?.stdout === 'string' ? out.stdout.replace(/\n+$/, '').split('\n') : []
@@ -3360,8 +3447,7 @@ export const register: Register = on => {
 
   // Badges (25): one coloured label per tool row; hover (36) shows the whole input.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    const P = await palette($)
-    const s = await read($, settings)
+    const [P, s] = await look($)
     const { tool, isRunning, isErrored, isInterrupted, tool_use_id } = e.props
     const isMcp = tool.startsWith('mcp__')
     if (!s.badges || !(tool in BADGE || isMcp)) return next(e)
@@ -3375,10 +3461,6 @@ export const register: Register = on => {
         : isErrored
           ? ['✗', P.err]
           : ['✓', P.ok]
-    const badgeCardWidth = Math.max(20, (e.viewport?.columns ?? 80) - 8)
-    const fields = Object.entries((e.props.input ?? {}) as Record<string, unknown>)
-      .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-      .map(([k, v]) => `${k}: ${commandLabel(String(v)).slice(0, 300)}`)
 
     return (
       <Box key={`row-${tool_use_id}`} flexDirection="row" gap={1}>
@@ -3400,8 +3482,8 @@ export const register: Register = on => {
   // /mods output in color: a card with gradient headings, commands in the
   // accent, [bật]/[tắt] as colored dots, and ✓/✗ results by outcome.
   on('ui.render', { component: 'CommandOutput', props: { command: 'mods' } }, async ($, e, next) => {
-    const P = await palette($)
-    if (e.props.isErrored || !(await read($, settings)).decor) return next(e)
+    const [P, s] = await look($)
+    if (e.props.isErrored || !s.decor) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     const lines = e.props.text
       .replace(/^terminal-polish:\s*/, '')
@@ -3477,24 +3559,33 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'UserMessage', props: { origin: { kind: 'composer' } } }, async ($, e, next) => {
-    const P = await palette($)
-    const s = await read($, settings)
-    const pics = await picsFor($, e.requestId, e.props.text)
+    const [[P, s], pics] = await Promise.all([look($), picsFor($, e.requestId, e.props.text)])
     if (!s.cards && !pics.length) return next(e)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const Image = 'Image' in t ? t.Image : undefined
 
+    // Card: an accent bar down the left of every line, ❯ on the first.
+    const bar = s.cards ? (
+      <Text color={P.accent} bold>
+        {'▌ '}
+      </Text>
+    ) : null
     const row = (
-      <Box flexDirection="row">
-        <Text color={P.accent} bold>
-          ❯{' '}
-        </Text>
-        <Text>{e.props.text}</Text>
+      <Box flexDirection="column">
+        {e.props.text.split('\n').map((line, i) => (
+          <Box flexDirection="row">
+            {bar}
+            <Text color={P.accent} bold>
+              {i === 0 ? '❯ ' : '  '}
+            </Text>
+            <Text wrap="wrap">{line || ' '}</Text>
+          </Box>
+        ))}
       </Box>
     )
     const thumbs = pics.length > 0 && (
-      <Box flexDirection="row" flexWrap="wrap" gap={2} marginTop={1}>
+      <Box flexDirection="row" flexWrap="wrap" gap={2} marginTop={1} marginLeft={s.cards ? 4 : 2}>
         {pics.map((pic, i) => (
           <Box flexDirection="column">
             {s.images && Image && pic.mediaType === 'image/png' && pic.data.length <= IMAGE_MAX_BASE64 ? (
@@ -3512,12 +3603,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    return s.cards ? (
-      <Box borderStyle="round" borderColor={P.accent} paddingX={1} flexDirection="column">
-        {row}
-        {thumbs}
-      </Box>
-    ) : (
+    return (
       <Box flexDirection="column">
         {row}
         {thumbs}
@@ -3536,8 +3622,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
-    const P = await palette($)
-    if (!(await read($, settings)).decor) return next(e)
+    const [P, s] = await look($)
+    if (!s.decor) return next(e)
     const { Text } = $.ui.resolve(e)
     return <Text color={P.muted}>✓ Xong sau {duration(e.props.durationMs)}</Text>
   })
