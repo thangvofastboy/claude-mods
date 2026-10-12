@@ -236,3 +236,23 @@ test('compact draws the band on one status row', async ($, on) => {
   expect((await run('compact')).text).toContain('BẬT')
   expect(await gaugeOnStatusRow()).toBe(true)
 })
+
+// A prompt card is a rounded bracket: ╭ on the first line, │ between, ╰ on the last; one line is ╰.
+test('a prompt card draws a rounded bracket down its left', async ($, on) => {
+  mock.store(on)
+  const card = (text: string) =>
+    $.ui.mount({
+      plugin: 'terminal-polish',
+      surface: 'terminal',
+      component: 'UserMessage',
+      props: { text, origin: { kind: 'composer' }, isExpanded: false },
+    })
+  const edges = async (text: string) => {
+    const ui = await card(text)
+    const found = (await ui.findAll({ type: 'Text', text: /^[╭│╰] $/ })).map(t => t.text)
+    await ui.unmount()
+    return found
+  }
+  expect(await edges('một\nhai\nba')).toEqual(['╭ ', '│ ', '╰ '])
+  expect(await edges('một dòng')).toEqual(['╰ '])
+})

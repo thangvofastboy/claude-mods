@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-34%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-37%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-11-5b8def?style=for-the-badge)
 
@@ -56,11 +56,11 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; tự ẩn khi bạn gửi prompt đầu tiên. |
 | 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
 | 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
-| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ có vạch màu ▌ bên trái, dễ phân biệt với câu trả lời mà không tốn thêm dòng. |
+| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ có ngoặc bo tròn `╭ │ ╰` màu nhấn bên trái, dễ phân biệt với câu trả lời mà không tốn thêm dòng. |
 | 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
-| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một dòng có vạch màu theo loại hiện vài giây trên dải trạng thái. |
+| 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một dòng có nét bo `╰` màu theo loại hiện vài giây trên dải trạng thái. |
 | 🖱️ | **Rê chuột đổi màu** | Rê chuột lên dòng tool thì dòng đổi màu; bấm mới mở chi tiết. |
 
 ### 📊 Bảng điều khiển
@@ -196,7 +196,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | Tên | Mặc định | | Tên | Mặc định |
 | --- | :-: | --- | --- | :-: |
 | `band` dải trạng thái | ✅ | | `secrets` quét secret | ✅ |
-| `cards` vạch màu tin nhắn | ✅ | | `budget` ngân sách | ✅ |
+| `cards` ngoặc bo tin nhắn | ✅ | | `budget` ngân sách | ✅ |
 | `tldr` tóm tắt câu trả lời | ✅ | | `checkpoints` lưu bản cũ | ✅ |
 | `notify` thông báo | ✅ | | `branchlock` khóa nhánh | ⬜ |
 | `sound` âm thanh | ⬜ | | `format` tự format | ⬜ |
