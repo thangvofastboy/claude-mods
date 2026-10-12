@@ -1998,7 +1998,11 @@ function commandAt(words: string[], test: (w: string) => boolean) {
   return -1
 }
 
-export function blastOf(command: string): BlastKind | undefined {
+// Every risky part of a command, not only the first: `rm -r a; git reset --hard`
+// must show both before anyone presses Run.
+export function blastAll(command: string): BlastKind[] {
+  const found: BlastKind[] = []
+  const add = (kind: BlastKind) => found.push(kind)
   for (const words of shellSegments(command)) {
     const at = commandAt(words, w => w === 'rm' || w.endsWith('/rm'))
     if (at >= 0) {
@@ -2012,30 +2016,35 @@ export function blastOf(command: string): BlastKind | undefined {
         else if (!endOfFlags && /^-[a-zA-Z]+$/.test(w)) recursive ||= /[rR]/.test(w)
         else targets.push(w)
       }
-      if (recursive && targets.length > 0) return { kind: 'rm', targets }
+      if (recursive && targets.length > 0) {
+        add({ kind: 'rm', targets })
+        continue
+      }
     }
     if (commandAt(words, w => w === 'git' || w.endsWith('/git')) < 0) continue
     const git = gitCommand(words)
     if (!git) continue
     const args = git.args
     const dash = args.indexOf('--')
-    if (git.sub === 'reset' && args.includes('--hard')) return { kind: 'reset' }
+    if (git.sub === 'reset' && args.includes('--hard')) add({ kind: 'reset' })
     if (git.sub === 'clean' && args.some(a => a === '--force' || /^-[a-zA-Z]*f/.test(a))) {
       // Only the flags that widen what is removed; -e takes a value and is left out.
       const wide = [...new Set(args.filter(a => /^-[a-zA-Z]+$/.test(a)).flatMap(a => [...a.slice(1)]))].filter(c => 'dxX'.includes(c))
-      return { kind: 'clean', flags: wide.length ? [`-${wide.join('')}`] : [] }
+      add({ kind: 'clean', flags: wide.length ? [`-${wide.join('')}`] : [] })
     }
-    if (git.sub === 'checkout' && (dash >= 0 ? args.slice(dash + 1) : args).includes('.')) return { kind: 'discard' }
-    if (git.sub === 'restore' && args.includes('.') && !args.includes('--staged')) return { kind: 'discard' }
+    if (git.sub === 'checkout' && (dash >= 0 ? args.slice(dash + 1) : args).includes('.')) add({ kind: 'discard' })
+    if (git.sub === 'restore' && args.includes('.') && !args.includes('--staged')) add({ kind: 'discard' })
     if (git.sub === 'push') {
       const refs = args.filter(a => !a.startsWith('-'))
       const force = args.some(a => a.startsWith('--force') || (/^-[a-zA-Z]+$/.test(a) && a.includes('f')))
       if (force || refs.slice(1).some(r => r.startsWith('+')))
-        return { kind: 'push', remote: refs[0] ?? 'origin', branch: refs[1] ? pushTarget(refs[1]) : undefined }
+        add({ kind: 'push', remote: refs[0] ?? 'origin', branch: refs[1] ? pushTarget(refs[1]) : undefined })
     }
   }
-  return undefined
+  return found
 }
+
+export const blastOf = (command: string): BlastKind | undefined => blastAll(command)[0]
 
 const BLAST_WAIT_MS = 10 * 60 * 1000
 const BLAST_ROWS = 8
@@ -2137,22 +2146,23 @@ export function holdBlast(
   $: EngineInterface,
   id: string,
   command: string,
-  kind: BlastKind,
+  kinds: BlastKind[],
   signal: AbortSignal,
   from?: string,
 ): Promise<'run' | 'cancel' | 'timeout'> {
-  const turn = blastGate.then(() => holdOne($, id, command, kind, signal, from))
+  const turn = blastGate.then(() => holdOne($, id, command, kinds, signal, from))
   blastGate = turn.catch(() => undefined)
   return turn
 }
 
-async function holdOne($: EngineInterface, id: string, command: string, kind: BlastKind, signal: AbortSignal, from?: string) {
+async function holdOne($: EngineInterface, id: string, command: string, kinds: BlastKind[], signal: AbortSignal, from?: string) {
   if (signal.aborted) return 'cancel' as const
-  let report: Omit<Blast, 'id' | 'command'>
-  try {
-    report = await measureBlast($, kind, command)
-  } catch {
-    report = unmeasured('')
+  const parts = await Promise.all(kinds.map(kind => measureBlast($, kind, command).catch(() => unmeasured(''))))
+  // One card for every risky part: each title, then the rows, which share the space.
+  const report: Omit<Blast, 'id' | 'command'> = {
+    title: parts.map(p => p.title).join(' · '),
+    lines: parts.flatMap(p => p.lines).slice(0, BLAST_ROWS),
+    note: [...new Set(parts.map(p => p.note).filter(Boolean))].join(' · '),
   }
   const label = `${from ? `[${from}] ` : ''}${commandLabel(command)}`
   await update($, blast, () => ({ id, command: label, ...report }))
@@ -2172,6 +2182,20 @@ async function holdOne($: EngineInterface, id: string, command: string, kind: Bl
 export const answerBlast = ($: EngineInterface, id: string, answer: 'run' | 'cancel') => {
   blastAnswers.set(id, answer)
   return update($, blast, b => (b?.id === id ? null : b))
+}
+
+// Bash and Monitor alike: hold a risky command; a deny unless the person pressed Run.
+export async function heldVerdict($: EngineInterface, id: string, command: string, signal: AbortSignal, agentId?: string) {
+  const kinds = interactive && (await read($, settings)).blast ? blastAll(command) : []
+  if (kinds.length === 0) return undefined
+  const answer = await holdBlast($, id, command, kinds, signal, agentId ? 'subagent' : undefined)
+  if (answer === 'run') return undefined
+  return {
+    deny:
+      answer === 'timeout'
+        ? 'terminal-polish: không ai trả lời sau 10 phút nên lệnh rủi ro này không chạy. Hỏi người dùng trước khi thử lại.'
+        : 'Người dùng đã bấm Hủy sau khi xem lệnh này sẽ thay đổi gì; không có gì bị thay đổi. Hỏi họ muốn làm gì thay vào đó.',
+  }
 }
 
 // The guard's verdict on one shell command (Bash or Monitor). The branch is
@@ -2673,28 +2697,22 @@ export const register: Register = on => {
       await notice($, `🛡 Đã chặn: ${reason}`)
       return guard(reason)
     }
-    const kind = interactive && (await read($, settings)).blast ? blastOf(e.command) : undefined
-    if (kind) {
-      const answer = await holdBlast($, e.tool_use_id, e.command, kind, next.signal, e.agentId ? 'subagent' : undefined)
-      if (answer !== 'run') {
-        return {
-          deny:
-            answer === 'timeout'
-              ? 'terminal-polish: không ai trả lời sau 10 phút nên lệnh rủi ro này không chạy. Hỏi người dùng trước khi thử lại.'
-              : 'Người dùng đã bấm Hủy sau khi xem lệnh này sẽ thay đổi gì; không có gì bị thay đổi. Hỏi họ muốn làm gì thay vào đó.',
-        }
-      }
-    }
-    return next(e)
+    const held = await heldVerdict($, e.tool_use_id, e.command, next.signal, e.agentId)
+    return held ?? next(e)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   // Monitor runs a shell command too: the same rules, or it is a way around them.
   on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
     const raw = (e as unknown as { command?: unknown }).command
-    const reason = await shellReason($, typeof raw === 'string' ? raw : '')
-    if (!reason) return next(e)
-    await notice($, `🛡 Đã chặn: ${reason}`)
-    return guard(reason)
+    const command = typeof raw === 'string' ? raw : ''
+    const reason = await shellReason($, command)
+    if (reason) {
+      await notice($, `🛡 Đã chặn: ${reason}`)
+      return guard(reason)
+    }
+    // The same hold as Bash, or Monitor is a way around it.
+    const held = await heldVerdict($, e.tool_use_id, command, next.signal, e.agentId)
+    return held ?? next(e)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
