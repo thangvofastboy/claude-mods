@@ -116,7 +116,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   splash: 'màn chào khi mở session',
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
   hovercards: 'đổi màu dòng khi rê chuột (fullscreen)',
-  images: 'ảnh logo ở màn chào (kitty/Ghostty)',
+  images: 'ảnh logo ở màn chào và thumbnail ảnh đã paste (kitty/Ghostty; nút mở ảnh luôn có)',
   secrets: 'chặn prompt có API key, token, private key (gửi lại với >> ở đầu để vẫn gửi)',
   budget: 'giới hạn chi tiêu theo ngày đặt bằng /mods budget',
   checkpoints: 'lưu bản cũ trước khi Claude sửa file (/mods undo)',
@@ -814,6 +814,69 @@ async function timerCommand($: EngineInterface, rest: string) {
   const endsAt = (await $.clock.now()) + Math.min(minutes, 24 * 60) * 60000
   await armTimer($, endsAt)
   return `⏱ Hẹn giờ ${minutes} phút.`
+}
+
+// ---- pasted images: a thumbnail under the prompt's [Image #n], a press opens the file
+export type Pic = { label: string; mediaType: string; data: string }
+type ApiMsg = { role: string; content: { type: string; [field: string]: unknown }[] }
+const IMAGE_TOKEN = /\[Image #\d+\]/g
+const IMAGE_MAX_BASE64 = (2 * 1024 * 1024 * 4) / 3 // Image takes 2 MiB decoded
+const picCache = new Map<string, Pic[]>()
+const unTokened = (text: string) => text.replace(IMAGE_TOKEN, '').replace(/\s+/g, ' ').trim()
+
+async function picsFor($: EngineInterface, rowId: string, text: string): Promise<Pic[]> {
+  const cached = picCache.get(rowId)
+  if (cached) return cached
+  if (!text.includes('[Image #')) return []
+  const pics = matchPics(await $.session.messages({ as: 'api' }).catch(() => []), text)
+  if (pics.length) picCache.set(rowId, pics) // misses not cached: the row may draw before its message is stored
+  return pics
+}
+
+// The row carries no bytes; the stored user message with the same words does.
+// ponytail: newest text match wins, so two identical prompts show the newer's images.
+export function matchPics(messages: readonly ApiMsg[], text: string): Pic[] {
+  const labels = text.match(IMAGE_TOKEN) ?? []
+  if (!labels.length) return []
+  const want = unTokened(text)
+  for (const m of [...messages].reverse()) {
+    if (m.role !== 'user') continue
+    const sources = m.content.flatMap(b => {
+      const s = b.type === 'image' ? (b.source as { type?: string; media_type?: string; data?: string }) : undefined
+      return s?.type === 'base64' && s.data ? [{ mediaType: String(s.media_type), data: s.data }] : []
+    })
+    if (!sources.length) continue
+    const said = m.content.flatMap(b => (b.type === 'text' ? [unTokened(String(b.text))] : []))
+    if (want && !said.includes(want)) continue
+    return sources.map((s, i) => ({ ...s, label: labels[i] ?? `[Image #${i + 1}]` }))
+  }
+  return []
+}
+
+// PNG's IHDR holds width and height, big-endian, at bytes 16 and 20; a cell is ~2:1.
+function thumbSize(data: string) {
+  const head = atob(data.slice(0, 32))
+  const u32 = (at: number) => [0, 1, 2, 3].reduce((n, i) => n * 256 + head.charCodeAt(at + i), 0)
+  const w = u32(16)
+  const h = u32(20)
+  if (!w || !h) return { columns: 20, rows: 6 }
+  const rows = Math.max(1, Math.min(8, Math.round((20 * h) / w / 2)))
+  return { columns: Math.max(1, Math.min(20, Math.round((rows * 2 * w) / h))), rows }
+}
+
+export async function openPic($: EngineInterface, pic: Pic) {
+  const ext = pic.mediaType.split('/')[1]?.replace(/[^a-z0-9]/g, '') || 'png'
+  const run = await $.process.run(
+    [
+      'sh',
+      '-c',
+      'f=$(mktemp "${TMPDIR:-/tmp}/claude-image-XXXXXX.$1") && base64 -d > "$f" && { command -v xdg-open >/dev/null && opener=xdg-open || opener=open; } && ("$opener" "$f" >/dev/null 2>&1 &)',
+      'sh',
+      ext,
+    ],
+    { stdin: pic.data, timeoutMs: 10000 },
+  )
+  if (run.exitCode !== 0) void notice($, `Không mở được ảnh: ${run.stderr.trim() || run.exitCode}`)
 }
 
 // ---- selection (16): act on what the person selected in the fullscreen transcript
@@ -3415,17 +3478,49 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage', props: { origin: { kind: 'composer' } } }, async ($, e, next) => {
     const P = await palette($)
-    if (!(await read($, settings)).cards) {
-      return next(e)
-    }
-    const { Box, Text } = $.ui.resolve(e)
+    const s = await read($, settings)
+    const pics = await picsFor($, e.requestId, e.props.text)
+    if (!s.cards && !pics.length) return next(e)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Image = 'Image' in t ? t.Image : undefined
 
-    return (
-      <Box borderStyle="round" borderColor={P.accent} paddingX={1} flexDirection="row">
+    const row = (
+      <Box flexDirection="row">
         <Text color={P.accent} bold>
           ❯{' '}
         </Text>
         <Text>{e.props.text}</Text>
+      </Box>
+    )
+    const thumbs = pics.length > 0 && (
+      <Box flexDirection="row" flexWrap="wrap" gap={2} marginTop={1}>
+        {pics.map((pic, i) => (
+          <Box flexDirection="column">
+            {s.images && Image && pic.mediaType === 'image/png' && pic.data.length <= IMAGE_MAX_BASE64 ? (
+              <Image key={`img-${i}`} source={{ png: pic.data }} {...thumbSize(pic.data)} alt={pic.label} />
+            ) : null}
+            <Button
+              key={`open-${e.requestId}-${i}`}
+              label={`🖼 ${pic.label} · mở`}
+              plain
+              dimColor
+              onPress={() => void openPic($, pic)}
+            />
+          </Box>
+        ))}
+      </Box>
+    )
+
+    return s.cards ? (
+      <Box borderStyle="round" borderColor={P.accent} paddingX={1} flexDirection="column">
+        {row}
+        {thumbs}
+      </Box>
+    ) : (
+      <Box flexDirection="column">
+        {row}
+        {thumbs}
       </Box>
     )
   })
