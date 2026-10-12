@@ -91,7 +91,7 @@ const DEFAULTS: Settings = {
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
-  cards: 'vạch màu bên trái tin nhắn của bạn',
+  cards: 'ngoặc bo tròn bên trái tin nhắn của bạn',
   tldr: 'TL;DR dưới câu trả lời dài (tốn thêm token haiku)',
   notify: 'thông báo hệ điều hành khi lượt dài xong',
   sound: 'âm thanh khi lượt dài xong',
@@ -2762,12 +2762,12 @@ export const register: Register = on => {
         width={e.props.bodyColumns}
         {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
       >
-        {/* Notices: one line each behind a bar in their color, not a boxed card. */}
+        {/* Notices: one line each behind a rounded mark in their color, not a boxed card. */}
         {cards.length > 0 && (
           <Box flexDirection="column" marginBottom={1}>
             {cards.map(n => (
               <Box key={`notice-${n.id}`} flexDirection="row" gap={1}>
-                <Text color={P[n.kind]}>▌</Text>
+                <Text color={P[n.kind]}>╰</Text>
                 <Text>{n.icon}</Text>
                 <Text color={P[n.kind]} bold wrap="wrap">
                   {n.text}
@@ -3601,17 +3601,14 @@ export const register: Register = on => {
     const { Box, Text, Button } = t
     const Image = 'Image' in t ? t.Image : undefined
 
-    // Card: an accent bar down the left of every line, ❯ on the first.
-    const bar = s.cards ? (
-      <Text color={P.accent} bold>
-        {'▌ '}
-      </Text>
-    ) : null
+    // Card: a rounded bracket down the left (╭ │ ╰, one line ╰), ❯ on the first line.
+    const lines = e.props.text.split('\n')
+    const edge = (i: number) => (i === lines.length - 1 ? '╰ ' : i === 0 ? '╭ ' : '│ ')
     const row = (
       <Box flexDirection="column">
-        {e.props.text.split('\n').map((line, i) => (
+        {lines.map((line, i) => (
           <Box flexDirection="row">
-            {bar}
+            {s.cards ? <Text color={P.accent}>{edge(i)}</Text> : null}
             <Text color={P.accent} bold>
               {i === 0 ? '❯ ' : '  '}
             </Text>
