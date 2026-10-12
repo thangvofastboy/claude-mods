@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface } from 'claude-code'
-import { answerBlast, blastOf, holdBlast } from '../hooks/register'
+import { answerBlast, blastAll, blastOf, heldVerdict, holdBlast } from '../hooks/register'
 
 const R = 'r' + 'm'
 const PUSH = 'git ' + 'push'
@@ -60,7 +60,7 @@ for (const [answer, expected] of [
         },
       },
     } as unknown as EngineInterface
-    const verdict = await holdBlast($, 'call-1', `${R} -rf build`, { kind: 'rm', targets: ['build'] }, new AbortController().signal)
+    const verdict = await holdBlast($, 'call-1', `${R} -rf build`, [{ kind: 'rm', targets: ['build'] }], new AbortController().signal)
     expect(verdict).toBe(expected)
     expect(shown).toContainEqual(
       expect.objectContaining({ title: 'rm sẽ xóa 12 file (2.0 MB) trong 1 mục', lines: ['build'] }),
@@ -84,7 +84,7 @@ test('Esc during a hold cancels it', async () => {
       },
     },
   } as unknown as EngineInterface
-  expect(await holdBlast($, 'call-2', 'git reset --hard', { kind: 'reset' }, stop.signal)).toBe('cancel')
+  expect(await holdBlast($, 'call-2', 'git reset --hard', [{ kind: 'reset' }], stop.signal)).toBe('cancel')
 })
 
 // Measuring must never act: a path named like a find expression stays a path,
@@ -111,13 +111,43 @@ test('measuring a held rm passes paths as paths and never guesses', async () => 
       },
     }) as unknown as EngineInterface
 
-  await holdBlast(fake('-delete\n/abs/x\n'), 'm', `${R} -rf *`, { kind: 'rm', targets: ['*'] }, new AbortController().signal)
+  await holdBlast(fake('-delete\n/abs/x\n'), 'm', `${R} -rf *`, [{ kind: 'rm', targets: ['*'] }], new AbortController().signal)
   const find = runs.find(a => a[0] === 'sh' && a[2]?.startsWith('find'))
   expect(find?.slice(4)).toEqual(['./-delete', '/abs/x'])
   expect(runs.find(a => a[0] === 'du')?.slice(2)).toEqual(['--', './-delete', '/abs/x'])
 
   runs.length = 0
-  await holdBlast(fake(''), 'm', `${R} -rf "$BUILD_DIR"`, { kind: 'rm', targets: ['$BUILD_DIR'] }, new AbortController().signal)
+  await holdBlast(fake(''), 'm', `${R} -rf "$BUILD_DIR"`, [{ kind: 'rm', targets: ['$BUILD_DIR'] }], new AbortController().signal)
   expect(runs.some(a => a[0] === 'du' || a[2]?.startsWith('for p'))).toBe(false)
   expect(shown).toContainEqual(expect.objectContaining({ title: 'Không đo được lệnh này sẽ thay đổi gì' }))
 })
+
+// Every risky part is on the card, not just the first one.
+test('a command with several risky parts lists them all', () => {
+  expect(blastAll(`${R} -r build; git reset --hard && git clean -fd`).map(k => k.kind)).toEqual(['rm', 'reset', 'clean'])
+  expect(blastAll('ls && git status')).toEqual([])
+})
+
+// Bash and Monitor share this verdict: a risky command is held, and only Run lets it through.
+for (const [answer, denied] of [
+  ['cancel', true],
+  ['run', false],
+] as const) {
+  test(`the shared Bash/Monitor hold denies unless Run (${answer})`, async () => {
+    const $ = {
+      state: { get: async () => ({ value: undefined, version: 0 }), set: async () => ({ isSet: true, version: 1 }) },
+      clock: { now: async () => 0, after: () => ({ cancel() {} }) },
+      ui: { toast: () => undefined },
+      session: { cwd: async () => '/work/app' },
+      process: {
+        run: async (argv: string[]) => {
+          if (argv[0] === 'sleep') void answerBlast($, 'mon-1', answer)
+          return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+        },
+      },
+    } as unknown as EngineInterface
+    const verdict = await heldVerdict($, 'mon-1', 'git reset --hard', new AbortController().signal)
+    expect(verdict?.deny !== undefined).toBe(denied)
+    expect(await heldVerdict($, 'mon-2', 'git status', new AbortController().signal)).toBeUndefined()
+  })
+}
