@@ -69,6 +69,7 @@ const DEFAULTS: Settings = {
   badges: true,
   gradient: true,
   powerline: false,
+  compact: false,
   meters: true,
   statecolor: true,
   fileicons: true,
@@ -108,6 +109,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   badges: 'badge màu cho từng dòng tool',
   gradient: 'chữ chuyển màu cho tên dự án và tiêu đề',
   powerline: 'dải trạng thái kiểu powerline (cần font Nerd Font)',
+  compact: 'dải trạng thái gọn 1 hàng (tắt: 2 hàng, thanh đo ở hàng riêng)',
   meters: 'thanh đo màu ▰▰▱ cho context và quota',
   statecolor: 'viền dải trạng thái đổi màu theo trạng thái',
   fileicons: 'nhãn màu theo loại file trong bảng hoạt động',
@@ -137,6 +139,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
     'quota',
     'gradient',
     'powerline',
+    'compact',
     'meters',
     'statecolor',
     'fileicons',
@@ -2607,6 +2610,15 @@ export const register: Register = on => {
       </Text>
     )
 
+    const gauges = segments
+      .filter(seg => seg.meter)
+      .map(seg => (
+        <Box flexDirection="row">
+          <Text color={P.muted}>{label(seg)}</Text>
+          {meterRuns(seg)}
+        </Box>
+      ))
+
     // Powerline: each segment a colored block, joined by  in the next block's color.
     const POWER = ''
     const status = s.powerline ? (
@@ -2624,17 +2636,19 @@ export const register: Register = on => {
         <Text color={segments[segments.length - 1]?.color ?? P.accent}>{POWER}</Text>
       </Box>
     ) : (
-      // Two lines: who and what (cost at the right edge), then the gauges.
-      // Each chip is its own Box, so a narrow terminal wraps between chips, never inside one.
+      // Who and what (cost at the right edge), then the gauges: on a second line,
+      // or in the same one with `compact`. Each chip is its own Box, so a narrow
+      // terminal wraps between chips, never inside one.
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
-          <Box flexDirection="row" flexWrap="wrap" flexShrink={1} columnGap={3}>
+          <Box flexDirection="row" flexWrap="wrap" flexShrink={1} columnGap={s.compact ? 2 : 3}>
             <Box flexDirection="row">{title}</Box>
             {segments
               .filter(seg => !seg.meter && !seg.right)
               .map(seg => (
                 <Text color={seg.color}>{seg.text}</Text>
               ))}
+            {s.compact ? gauges : null}
           </Box>
           {segments
             .filter(seg => seg.right)
@@ -2644,16 +2658,9 @@ export const register: Register = on => {
               </Text>
             ))}
         </Box>
-        {segments.some(seg => seg.meter) && (
+        {!s.compact && gauges.length > 0 && (
           <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
-            {segments
-              .filter(seg => seg.meter)
-              .map(seg => (
-                <Box flexDirection="row">
-                  <Text color={P.muted}>{label(seg)}</Text>
-                  {meterRuns(seg)}
-                </Box>
-              ))}
+            {gauges}
           </Box>
         )}
       </Box>

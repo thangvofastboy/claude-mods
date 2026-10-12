@@ -48,7 +48,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 
 | | Tính năng | Mô tả |
 | :-: | --- | --- |
-| 📟 | **Dải trạng thái** | Thẻ gọn ngay trên ô prompt: dòng 1 `◆ dự-án   ⎇ main ±3   ✓ 12s · 5 tool …… $0.31`, dòng 2 các thanh đo `ctx ▰▰▰▱▱▱ 42%   5h ▰▰▱▱▱▱ 34%`, dòng 3 phím tắt `s: Session · d: Bảng · p: Prompt · c: Cài đặt · v: Chọn · h: Ẩn`. Terminal hẹp thì ngắt giữa các mục, không cắt ngang một mục. |
+| 📟 | **Dải trạng thái** | Thẻ gọn ngay trên ô prompt: dòng 1 `◆ dự-án   ⎇ main ±3   ✓ 12s · 5 tool …… $0.31`, dòng 2 các thanh đo `ctx ▰▰▰▱▱▱ 42%   5h ▰▰▱▱▱▱ 34%`, dòng 3 phím tắt `s: Session · d: Bảng · p: Prompt · c: Cài đặt · v: Chọn · h: Ẩn`. Terminal hẹp thì ngắt giữa các mục, không cắt ngang một mục. Muốn gọn 1 hàng (thanh đo nằm chung hàng với trạng thái): `/mods compact` hoặc bật `compact` trong tab cài đặt. |
 | 🟢 | **Viền theo trạng thái** | Xanh khi rảnh, vàng khi đang chạy, đỏ khi lượt trước có lỗi. |
 | 🌈 | **Chữ chuyển màu** | Tên dự án, tiêu đề panel và logo được tô chuyển màu theo theme. |
 | ▰ | **Thanh đo màu** | Context, quota và ngân sách hiện dạng `▰▰▰▱▱▱`, chuyển dần từ xanh sang vàng rồi đỏ. |
@@ -213,6 +213,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
 | `badges` badge tool | ✅ | | `heatmap` · `images` logo & thumbnail ảnh | ✅ |
 | `notices` thẻ thông báo màu | ✅ | | `hovercards` đổi màu khi rê chuột | ✅ |
+| `compact` dải trạng thái 1 hàng | ⬜ | | | |
 
 ---
 

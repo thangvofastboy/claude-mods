@@ -204,3 +204,35 @@ test('/mods theme navy switches to the navy palette and suggests its background'
   expect(ran.text).toContain('Đã đổi theme: navy')
   expect(ran.text).toContain('#0b1426')
 })
+
+// compact puts the gauges on the status line; off, they get a line of their own.
+test('compact draws the band on one status row', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const run = (args: string) =>
+    $.command.run({ command: 'mods', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  const band = {
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 80, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+  } as const
+  // The row whose own children say "sẵn sàng": does it also hold the budget gauge?
+  type Node = { type?: string; children?: unknown }
+  const kids = (n: Node): Node[] => [n.children].flat(Infinity).filter(x => x && typeof x === 'object') as Node[]
+  const text = (n: unknown): string =>
+    typeof n === 'string' ? n : n && typeof n === 'object' ? [(n as Node).children].flat(Infinity).map(text).join('') : ''
+  const statusRow = (n: Node): Node | undefined =>
+    kids(n).some(k => k.type === 'Text' && text(k) === 'sẵn sàng') ? n : kids(n).map(statusRow).find(Boolean)
+  const gaugeOnStatusRow = async () => {
+    const ui = await $.ui.mount(band)
+    const tree = (await ui.drawn()) as Node
+    await ui.unmount()
+    return text(statusRow(tree)).includes('💰')
+  }
+
+  await run('budget 5')
+  expect(await gaugeOnStatusRow()).toBe(false)
+  expect((await run('compact')).text).toContain('BẬT')
+  expect(await gaugeOnStatusRow()).toBe(true)
+})
