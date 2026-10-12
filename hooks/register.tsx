@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type {
   Agent,
+  Blast,
   Breakdown,
   Call,
   CheckResult,
@@ -70,6 +71,10 @@ const DEFAULTS: Settings = {
   gradient: true,
   powerline: false,
   compact: false,
+  weather: true,
+  blast: true,
+  fun: true,
+  ctxwarn: true,
   meters: true,
   statecolor: true,
   fileicons: true,
@@ -93,13 +98,14 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
   cards: 'ngoặc bo tròn bên trái tin nhắn của bạn',
   tldr: 'TL;DR dưới câu trả lời dài (tốn thêm token haiku)',
-  notify: 'thông báo hệ điều hành khi lượt dài xong',
+  notify: 'báo khi lượt dài xong (thẻ trên dải trạng thái và thông báo hệ điều hành)',
   sound: 'âm thanh khi lượt dài xong',
   voice: 'đọc to khi lượt dài xong',
   guard: 'chặn lệnh nguy hiểm và việc sửa file bí mật',
   decor: 'spinner, dòng gợi ý và dòng thời gian kiểu mới',
   quota: 'thanh quota 5h/7d trên dải trạng thái',
-  autocompact: `tự /compact khi context từ ${COMPACT_PERCENT}% (tắt: chỉ nhắc)`,
+  autocompact: `tự /compact khi context từ ${COMPACT_PERCENT}% (tắt: chỉ nhắc nếu bật ctxwarn)`,
+  ctxwarn: `nhắc /compact khi context từ ${COMPACT_PERCENT}%`,
   abbrev: 'bung từ viết tắt ;xxx trong prompt',
   rules: 'thêm luật của dự án vào system prompt',
   tools: 'tool notify_me và subagent reviewer/tester cho Claude (áp dụng khi nạp lại)',
@@ -110,11 +116,14 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   gradient: 'chữ chuyển màu cho tên dự án và tiêu đề',
   powerline: 'dải trạng thái kiểu powerline (cần font Nerd Font)',
   compact: 'dải trạng thái gọn 1 hàng (tắt: 2 hàng, thanh đo ở hàng riêng)',
+  weather: 'thời tiết context ☀☁☂☇↯ và số token lượt trước thêm vào',
+  fun: 'câu đùa ngẫu nhiên cạnh spinner và dự báo hài cho hôm nay (/mods vui)',
+  blast: 'giữ lệnh rủi ro (rm -r, git reset --hard, clean, force-push), cho xem sẽ thay đổi gì rồi bấm 1 chạy / 2 hủy',
   meters: 'thanh đo màu ▰▰▱ cho context và quota',
   statecolor: 'viền dải trạng thái đổi màu theo trạng thái',
   fileicons: 'nhãn màu theo loại file trong bảng hoạt động',
   anim: 'vệt sáng chạy khi Claude đang làm (chỉ terminal)',
-  confetti: 'pháo hoa khi test pass hoặc xong việc dài (chỉ terminal)',
+  confetti: 'thông báo "Test pass!" và pháo hoa khi test pass hoặc xong việc dài (pháo hoa chỉ ở terminal)',
   splash: 'màn chào khi mở session',
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
   hovercards: 'đổi màu dòng khi rê chuột (fullscreen)',
@@ -140,6 +149,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
     'gradient',
     'powerline',
     'compact',
+    'weather',
     'meters',
     'statecolor',
     'fileicons',
@@ -151,9 +161,9 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
     'images',
     'notices',
   ],
-  'Hiệu ứng': ['anim', 'confetti', 'sound', 'voice'],
-  'An toàn': ['guard', 'secrets', 'budget', 'checkpoints', 'branchlock'],
-  'Tiện ích': ['tldr', 'notify', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos'],
+  'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
+  'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos'],
   'Tự động': ['format', 'autocheck'],
   'Thử nghiệm': ['automodel'],
 }
@@ -203,6 +213,7 @@ const breakdown = atom({ plugin: 'terminal-polish', key: 'breakdown' } as const,
 const budgetWarned = atom({ plugin: 'terminal-polish', key: 'budgetWarned' } as const, '')
 const spentToday = atom({ plugin: 'terminal-polish', key: 'spentToday' } as const, 0)
 const budgetLimit = atom({ plugin: 'terminal-polish', key: 'budgetLimit' } as const, 0)
+const blast = atom({ plugin: 'terminal-polish', key: 'blast' } as const, null)
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
 const STATE_ROLE = { run: 'warn', ok: 'ok', fail: 'err' } as const
@@ -453,13 +464,24 @@ async function refreshGit($: EngineInterface) {
 
 async function refreshUsage($: EngineInterface) {
   try {
-    const u = await $.session.usage()
+    const [u, before] = await Promise.all([$.session.usage(), read($, usage)])
+    const tokens = u.context.tokens ?? null
     const value: Usage = {
       percent: u.context.percent ?? null,
       usd: u.cost?.usd ?? null,
       limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
+      tokens,
+      // Unchanged tokens keep the last turn's figure; a drop (/compact, /clear) clears it.
+      added:
+        tokens == null || before?.tokens == null
+          ? null
+          : tokens === before.tokens
+            ? (before.added ?? null)
+            : tokens > before.tokens
+              ? tokens - before.tokens
+              : null,
     }
-    if (!same(await read($, usage), value)) await update($, usage, () => value)
+    if (!same(before, value)) await update($, usage, () => value)
   } catch {
     // Usage is decoration: the band simply leaves it out.
   }
@@ -664,6 +686,18 @@ async function updatePlugin($: EngineInterface) {
     '🔄 Đang nạp lại plugin (/reload-plugins)...',
   ].join('\n')
 }
+
+// Token weather (after Anthropic's token-weather sample mod): the context's fill as a forecast.
+export const weatherOf = (pct: number) => (pct < 25 ? '☀' : pct < 50 ? '☁' : pct < 75 ? '☂' : pct < 90 ? '☇' : '↯')
+// What the last turn added to the context: +850, +12k, +1.2M; nothing when it added nothing.
+export const kTokens = (n: number | null | undefined) =>
+  !n || n <= 0
+    ? undefined
+    : n < 1000
+      ? `+${n}`
+      : n < 1_000_000
+        ? `+${n < 10_000 ? (n / 1000).toFixed(1) : Math.round(n / 1000)}k`
+        : `+${(n / 1_000_000).toFixed(1)}M`
 
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: '$' }
 const pad2 = (n: number) => String(n).padStart(2, '0')
@@ -1373,6 +1407,77 @@ function heatGrid(counts: Record<string, number>, now: number) {
   )
 }
 
+// ---- fun: a joke beside the spinner each turn, and a mock forecast for the day
+export const JOKES = [
+  'Code chạy được đừng hỏi tại sao',
+  'Không có bug, chỉ có tính năng chưa được tài liệu hoá',
+  'Đã thử tắt đi bật lại chưa?',
+  'git commit -m "sửa nốt lần cuối" (lần thứ 7)',
+  'Trên máy tôi vẫn chạy mà',
+  '99 bug trong code, sửa một cái… 127 bug trong code',
+  'Comment bảo "tạm thời" từ năm 2019',
+  'Deploy chiều thứ Sáu: sống là phải liều',
+  'Đặt tên biến khó hơn viết thuật toán',
+  'Regex: giờ bạn có hai vấn đề',
+  'Cà phê vào, code ra ☕',
+  'Stack Overflow đang suy nghĩ cùng bạn',
+  'Test xanh thì yên tâm, test đỏ thì yên lặng',
+  'Đừng lo, Claude cũng đang đọc lại code cũ của bạn',
+  'TODO: viết TODO cho TODO này',
+  'Chạy lần hai thì được, đừng hỏi',
+  'Đây không phải lỗi, đây là hành vi không mong muốn',
+  'Một dấu chấm phẩy đã thay đổi cuộc đời tôi',
+  'Bàn phím cơ không làm code nhanh hơn, nhưng nghe kêu hơn',
+  'Đang tìm cái semicolon bị lạc',
+  'node_modules nặng hơn cả hố đen',
+  'Ai viết đoạn này vậy? …à, mình',
+  'Merge conflict là cách git nói "hai người cần nói chuyện"',
+  'Code đẹp nhất là code không cần viết',
+  'Debug bằng console.log: cổ điển nhưng chưa bao giờ lỗi mốt',
+  'Production là môi trường test lớn nhất',
+  'Mỗi lần refactor là một lần tái sinh',
+  'Ước gì đời cũng có Ctrl+Z',
+  'Uống nước đi, code chờ được',
+  'Claude không mệt, nhưng bạn nên nghỉ mắt 20 giây',
+]
+
+const FORECAST_SKY = [
+  '☀ Trời quang, ít bug',
+  '🌤 Nắng nhẹ, thỉnh thoảng có warning',
+  '⛅ Nhiều mây merge conflict',
+  '🌧 Mưa test đỏ rải rác buổi chiều',
+  '⛈ Giông deadline cuối ngày',
+  '🌈 Sau cơn build lỗi trời lại xanh',
+  '🌫 Sương mù yêu cầu chưa rõ',
+  '🌪 Lốc refactor bất ngờ',
+]
+const FORECAST_LUCK = [
+  'Hôm nay hợp sửa bug cũ, kỵ deploy thứ Sáu.',
+  'Quý nhân phù trợ: người review PR nhanh.',
+  'Số may mắn: 200 OK. Màu may mắn: xanh như test pass.',
+  'Nên commit nhỏ, tránh push --force.',
+  'Có duyên gặp lại cái bug tưởng đã sửa tuần trước.',
+  'Tài lộc: tiết kiệm được 3 lần chạy lại CI.',
+  'Đào hoa: được đồng nghiệp khen "code sạch đấy".',
+  'Cẩn thận lời nói trong commit message, sếp đọc đấy.',
+  'Hợp viết test, sẽ phát hiện điều bất ngờ.',
+  'Tránh xa node_modules sau 5 giờ chiều.',
+  'Một câu "chắc chạy được" sẽ quay lại ám bạn.',
+  'Rất hợp để xoá code thừa: nhẹ người, nhẹ repo.',
+]
+
+// The same forecast all day: picked by the date, not at random.
+export function forecastFor(ms: number) {
+  const day = localDay(ms)
+  let h = 0
+  for (const ch of day) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  const sky = FORECAST_SKY[h % FORECAST_SKY.length] ?? ''
+  const luck = FORECAST_LUCK[Math.floor(h / FORECAST_SKY.length) % FORECAST_LUCK.length] ?? ''
+  return `Dự báo hôm nay: ${sky}. ${luck}`
+}
+
+let jokeAt = 0
+
 // ---- splash (34)
 const LOGO = ['╔═╗╦  ╔═╗╦ ╦╔╦╗╔═╗', '║  ║  ╠═╣║ ║ ║║║╣ ', '╚═╝╩═╝╩ ╩╚═╝═╩╝╚═╝']
 const TIPS = [
@@ -1411,6 +1516,7 @@ async function buildSplash($: EngineInterface, loaded?: Stats) {
     greeting: `${greet}, ${who} 👋`,
     last: lastLine,
     tip: `💡 ${TIPS[Math.floor(now / 60000) % TIPS.length] ?? ''}`,
+    forecast: `🔮 ${forecastFor(now)}`,
   }
   await update($, splashInfo, () => info)
 }
@@ -1870,6 +1976,204 @@ async function notice($: EngineInterface, raw: string) {
   $.clock.after(NOTICE_MS, () => void update($, notices, l => l.filter(n => n.id !== item.id)))
 }
 
+// ---- blast radius (after Anthropic's blast-radius sample mod): a risky shell
+// command is held, what it would change is shown on the band, and the person
+// runs or cancels it. The catastrophic ones (dangerOf) stay denied outright.
+export type BlastKind =
+  | { kind: 'rm'; targets: string[] }
+  | { kind: 'reset' }
+  | { kind: 'discard' }
+  | { kind: 'clean'; flags: string[] }
+  | { kind: 'push'; remote: string; branch?: string }
+
+// Words that may stand before the command they run: `sudo rm`, `FOO=1 git`, `then rm`.
+const LEAD = new Set(['sudo', 'env', 'command', 'exec', 'time', 'nice', 'nohup', 'then', 'do', 'else', '{', '!', 'xargs'])
+// Where `name` runs as the segment's command, not as an argument (`docker rm`, `git rm`, `echo rm`).
+function commandAt(words: string[], test: (w: string) => boolean) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] ?? ''
+    if (test(w)) return i
+    if (!LEAD.has(w) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !(i > 0 && w.startsWith('-'))) return -1
+  }
+  return -1
+}
+
+export function blastOf(command: string): BlastKind | undefined {
+  for (const words of shellSegments(command)) {
+    const at = commandAt(words, w => w === 'rm' || w.endsWith('/rm'))
+    if (at >= 0) {
+      // Recursive only: `rm -f file.log` is everyday work, a hold on it would get the feature switched off.
+      let recursive = false
+      let endOfFlags = false
+      const targets: string[] = []
+      for (const w of words.slice(at + 1)) {
+        if (!endOfFlags && w === '--') endOfFlags = true
+        else if (!endOfFlags && w.startsWith('--')) recursive ||= w === '--recursive'
+        else if (!endOfFlags && /^-[a-zA-Z]+$/.test(w)) recursive ||= /[rR]/.test(w)
+        else targets.push(w)
+      }
+      if (recursive && targets.length > 0) return { kind: 'rm', targets }
+    }
+    if (commandAt(words, w => w === 'git' || w.endsWith('/git')) < 0) continue
+    const git = gitCommand(words)
+    if (!git) continue
+    const args = git.args
+    const dash = args.indexOf('--')
+    if (git.sub === 'reset' && args.includes('--hard')) return { kind: 'reset' }
+    if (git.sub === 'clean' && args.some(a => a === '--force' || /^-[a-zA-Z]*f/.test(a))) {
+      // Only the flags that widen what is removed; -e takes a value and is left out.
+      const wide = [...new Set(args.filter(a => /^-[a-zA-Z]+$/.test(a)).flatMap(a => [...a.slice(1)]))].filter(c => 'dxX'.includes(c))
+      return { kind: 'clean', flags: wide.length ? [`-${wide.join('')}`] : [] }
+    }
+    if (git.sub === 'checkout' && (dash >= 0 ? args.slice(dash + 1) : args).includes('.')) return { kind: 'discard' }
+    if (git.sub === 'restore' && args.includes('.') && !args.includes('--staged')) return { kind: 'discard' }
+    if (git.sub === 'push') {
+      const refs = args.filter(a => !a.startsWith('-'))
+      const force = args.some(a => a.startsWith('--force') || (/^-[a-zA-Z]+$/.test(a) && a.includes('f')))
+      if (force || refs.slice(1).some(r => r.startsWith('+')))
+        return { kind: 'push', remote: refs[0] ?? 'origin', branch: refs[1] ? pushTarget(refs[1]) : undefined }
+    }
+  }
+  return undefined
+}
+
+const BLAST_WAIT_MS = 10 * 60 * 1000
+const BLAST_ROWS = 8
+const BLAST_MEASURE = 200
+const blastAnswers = new Map<string, 'run' | 'cancel'>()
+// Off in `claude -p` and the SDK: nobody is there to press a button.
+let interactive = true
+// One hold at a time (parallel subagents): the card has one slot, so a second waits its turn.
+let blastGate: Promise<unknown> = Promise.resolve()
+
+const lines = (out: string) => out.split('\n').filter(Boolean)
+const kb = (k: number) => (k >= 1024 * 1024 ? `${(k / 1024 / 1024).toFixed(1)} GB` : k >= 1024 ? `${(k / 1024).toFixed(1)} MB` : `${k} KB`)
+const unmeasured = (why: string) => ({ title: 'Không đo được lệnh này sẽ thay đổi gì', lines: [], note: why })
+
+// What the command would change, measured with argv and read-only git: the
+// command itself never runs here. Measured in the session's directory.
+// ponytail: a leading `cd dir &&` is not followed; the report says where it measured.
+async function measureBlast($: EngineInterface, kind: BlastKind, command: string): Promise<Omit<Blast, 'id' | 'command'>> {
+  if (/(^|\s|&&|;)(cd|pushd)\s/.test(command)) return unmeasured('lệnh đổi thư mục trước khi chạy')
+  const cwd = await $.session.cwd().catch(() => undefined)
+  const where = `đo trong ${cwd ? baseName(cwd) : 'thư mục hiện tại'}`
+  const run = (argv: string[], timeoutMs = 5000) => $.process.run(argv, { cwd, timeoutMs })
+  if (kind.kind === 'rm') {
+    // $VAR, $(…), `…`, {a,b}: the shell would turn these into other paths; measuring the text would say "nothing".
+    if (kind.targets.some(t => /[$`{(]/.test(t))) return unmeasured('đường dẫn có biến hoặc lệnh con')
+    const homeDir = await read($, home)
+    const targets = kind.targets.map(t => (homeDir ? t.replace(/^~(?=\/|$)/, homeDir) : t))
+    // Unquoted $p: the shell expands its glob, as rm would; nothing in it runs.
+    const found = await run([
+      'sh',
+      '-c',
+      'for p in "$@"; do for f in $p; do [ -e "$f" ] || [ -L "$f" ] && printf "%s\\n" "$f"; done; done',
+      'sh',
+      ...targets,
+    ])
+    if (found.exitCode !== 0) return unmeasured(where)
+    const paths = lines(found.stdout)
+    if (paths.length === 0) return { title: 'rm: không có gì để xóa ở đó', lines: [], note: where }
+    // ./ before a relative path: a file named `-delete` must stay a path, never a find expression.
+    const safe = paths.slice(0, BLAST_MEASURE).map(p => (p.startsWith('/') ? p : `./${p}`))
+    const [count, size] = await Promise.all([
+      run(['sh', '-c', 'find "$@" -type f 2>/dev/null | wc -l', 'sh', ...safe]),
+      run(['du', '-sck', '--', ...safe]),
+    ])
+    const total = Number.parseInt(lines(size.stdout).pop() ?? '0', 10) || 0
+    const partial = paths.length > BLAST_MEASURE ? ` (đếm ${BLAST_MEASURE} mục đầu)` : ''
+    return {
+      title: `rm sẽ xóa ${count.stdout.trim() || '?'} file (${kb(total)}) trong ${paths.length} mục${partial}`,
+      lines: paths.slice(0, BLAST_ROWS),
+      note: `${paths.length > BLAST_ROWS ? `+${paths.length - BLAST_ROWS} mục nữa · ` : ''}${where}`,
+    }
+  }
+  if (/\bgit\s+(-C|--git-dir|--work-tree)\b/.test(command)) return unmeasured('lệnh chạy git ở thư mục khác')
+  if (!(await gitIsSafe($, cwd))) return unmeasured('.git/config của repo khai báo chương trình git sẽ chạy')
+  const git = (args: string[]) => run([...SAFE_GIT, ...args])
+  if (kind.kind === 'reset' || kind.kind === 'discard') {
+    const [status, stat] = await Promise.all([
+      git(['status', '--porcelain', '--ignore-submodules=all']),
+      git(['diff', '--shortstat', '--no-ext-diff', ...(kind.kind === 'reset' ? ['HEAD'] : [])]),
+    ])
+    if (status.exitCode !== 0) return unmeasured(`không phải git repo? · ${where}`)
+    const changed = lines(status.stdout).filter(l => !l.startsWith('??') && (kind.kind === 'reset' || l[1] !== ' '))
+    return {
+      title: changed.length
+        ? `Mất thay đổi chưa commit ở ${changed.length} file${stat.stdout.trim() ? ` (${stat.stdout.trim()})` : ''}`
+        : 'Không có thay đổi nào sẽ mất',
+      lines: changed.slice(0, BLAST_ROWS).map(l => l.slice(3)),
+      note: changed.length > BLAST_ROWS ? `+${changed.length - BLAST_ROWS} file nữa` : '',
+    }
+  }
+  if (kind.kind === 'clean') {
+    const dry = await git(['clean', '-n', ...kind.flags])
+    if (dry.exitCode !== 0) return unmeasured(`git clean -n lỗi · ${where}`)
+    const gone = lines(dry.stdout).map(l => l.replace(/^Would remove /, ''))
+    return {
+      title: gone.length ? `git clean sẽ xóa ${gone.length} mục chưa theo dõi` : 'git clean không xóa gì',
+      lines: gone.slice(0, BLAST_ROWS),
+      note: gone.length > BLAST_ROWS ? `+${gone.length - BLAST_ROWS} mục nữa` : '',
+    }
+  }
+  // A remote given as a URL has no local tracking ref to compare against.
+  if (/[:/@]/.test(kind.remote)) return unmeasured('remote là URL, không có bản theo dõi trên máy')
+  const head = kind.branch ? undefined : await git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const branch = kind.branch ?? head?.stdout.trim() ?? ''
+  const ref = `${kind.remote}/${branch}`
+  const lost = await git(['log', '--oneline', '--no-decorate', `HEAD..${ref}`])
+  if (lost.exitCode !== 0) return unmeasured(`chưa có ${ref} trên máy (chưa fetch?)`)
+  const commits = lines(lost.stdout)
+  return {
+    title: commits.length ? `Force-push sẽ bỏ ${commits.length} commit trên ${ref}` : `Force-push lên ${ref}: không commit nào bị bỏ`,
+    lines: commits.slice(0, BLAST_ROWS),
+    note: `theo ${ref} lần fetch gần nhất`,
+  }
+}
+
+// Holds the call until a button answers. A hook's own time is capped, but time
+// inside a $ call is not: the wait is short sleeps in a process.
+export function holdBlast(
+  $: EngineInterface,
+  id: string,
+  command: string,
+  kind: BlastKind,
+  signal: AbortSignal,
+  from?: string,
+): Promise<'run' | 'cancel' | 'timeout'> {
+  const turn = blastGate.then(() => holdOne($, id, command, kind, signal, from))
+  blastGate = turn.catch(() => undefined)
+  return turn
+}
+
+async function holdOne($: EngineInterface, id: string, command: string, kind: BlastKind, signal: AbortSignal, from?: string) {
+  if (signal.aborted) return 'cancel' as const
+  let report: Omit<Blast, 'id' | 'command'>
+  try {
+    report = await measureBlast($, kind, command)
+  } catch {
+    report = unmeasured('')
+  }
+  const label = `${from ? `[${from}] ` : ''}${commandLabel(command)}`
+  await update($, blast, () => ({ id, command: label, ...report }))
+  void notice($, '⚠ Đang giữ một lệnh rủi ro: xem trên dải trạng thái; ô prompt trống thì bấm 1 chạy / 2 hủy, hoặc bấm chuột')
+  try {
+    const until = (await $.clock.now()) + BLAST_WAIT_MS
+    while (!blastAnswers.has(id) && !signal.aborted && (await $.clock.now()) < until) {
+      await $.process.run(['sleep', '0.5'], { timeoutMs: 3000 })
+    }
+    return blastAnswers.get(id) ?? (signal.aborted ? 'cancel' : 'timeout')
+  } finally {
+    blastAnswers.delete(id)
+    await update($, blast, b => (b?.id === id ? null : b))
+  }
+}
+
+export const answerBlast = ($: EngineInterface, id: string, answer: 'run' | 'cancel') => {
+  blastAnswers.set(id, answer)
+  return update($, blast, b => (b?.id === id ? null : b))
+}
+
 // The guard's verdict on one shell command (Bash or Monitor). The branch is
 // read now, not from the band's state: a checkout earlier in the same turn counts.
 async function shellReason($: EngineInterface, command: string) {
@@ -1981,6 +2285,7 @@ async function helpText($: EngineInterface) {
     '  abbrev [;k nội dung]  xem / thêm / xóa (bỏ nội dung) từ viết tắt',
     '  rule <x> · rules · unrule <số>  luật riêng của dự án này',
     '  timer <phút>       hẹn giờ (không số: hủy)',
+    '  vui                một câu đùa và dự báo hài cho hôm nay',
     'Phiên bản:',
     '  version   phiên bản đang dùng và tag mới nhất',
     '  update    cập nhật lên tag mới nhất rồi tự /reload-plugins',
@@ -1991,6 +2296,7 @@ async function helpText($: EngineInterface) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    interactive = e.isInteractive
     const ran = await next(e)
     // A reload keeps state but not timers: an effect left set would freeze on the band.
     await update($, fx, () => null).catch(() => undefined)
@@ -2101,6 +2407,7 @@ export const register: Register = on => {
     'context',
     'checkpoints',
     'rules',
+    'vui',
   ])
 
   on('command.run', { command: 'mods' }, async ($, e) => {
@@ -2191,6 +2498,10 @@ export const register: Register = on => {
       }
       case 'timer':
         return { text: await timerCommand($, args.slice(word.length).trim()) }
+      case 'vui': {
+        const now = await $.clock.now()
+        return { text: `😄 ${JOKES[Math.floor(Math.random() * JOKES.length)]}\n🔮 ${forecastFor(now)}` }
+      }
       case 'version':
         return { text: await versionText($) }
       case 'update':
@@ -2211,6 +2522,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
     const [, , , effect, s] = await Promise.all([
       update($, turn, () => value),
@@ -2357,9 +2669,23 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const reason = await shellReason($, e.command)
-    if (!reason) return next(e)
-    await notice($, `🛡 Đã chặn: ${reason}`)
-    return guard(reason)
+    if (reason) {
+      await notice($, `🛡 Đã chặn: ${reason}`)
+      return guard(reason)
+    }
+    const kind = interactive && (await read($, settings)).blast ? blastOf(e.command) : undefined
+    if (kind) {
+      const answer = await holdBlast($, e.tool_use_id, e.command, kind, next.signal, e.agentId ? 'subagent' : undefined)
+      if (answer !== 'run') {
+        return {
+          deny:
+            answer === 'timeout'
+              ? 'terminal-polish: không ai trả lời sau 10 phút nên lệnh rủi ro này không chạy. Hỏi người dùng trước khi thử lại.'
+              : 'Người dùng đã bấm Hủy sau khi xem lệnh này sẽ thay đổi gì; không có gì bị thay đổi. Hỏi họ muốn làm gì thay vào đó.',
+        }
+      }
+    }
+    return next(e)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   // Monitor runs a shell command too: the same rules, or it is a way around them.
@@ -2411,10 +2737,6 @@ export const register: Register = on => {
       const isFailed = ran.deny !== undefined || ran.isError === true
       // A denied or failed edit changed nothing: its checkpoint would undo nothing.
       if (isFailed && pointId !== undefined) await update($, checkpoints, l => l.filter(c => c.id !== pointId))
-      if (!isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
-        void notice($, '🎉 Test pass!')
-        void startFx($, 'party')
-      }
       const isEdit = !isFailed && !!path && e.tool !== 'Read'
       const [, , , s] = await Promise.all([
         update($, calls, list =>
@@ -2428,6 +2750,10 @@ export const register: Register = on => {
         isEdit && path ? update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30)) : undefined,
         read($, settings),
       ])
+      if (s.confetti && !isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
+        void notice($, '🎉 Test pass!')
+        void startFx($, 'party')
+      }
       if (isEdit && path) {
         if (s.format) await formatFile($, path)
         if (s.todos) {
@@ -2482,7 +2808,7 @@ export const register: Register = on => {
     }))
 
     const summary = `Xong sau ${duration(e.durationMs)} · ${done.tools} tool${done.failed ? ` · ${done.failed} lỗi` : ''}`
-    if (done.seconds >= TOAST_SECONDS) void notice($, `✓ ${summary}`)
+    if (s.notify && done.seconds >= TOAST_SECONDS) void notice($, `✓ ${summary}`)
     if (done.seconds >= NOTIFY_SECONDS && !e.isAborted) {
       const title = (await read($, project)) || 'Claude'
       if (s.notify) void $.ui.notify(summary, { title }).catch(() => undefined)
@@ -2517,7 +2843,7 @@ export const register: Register = on => {
         if (s.autocompact) {
           void notice($, `Context ${pct}%: đang tự /compact…`)
           $.clock.after(500, () => void $.session.compact({}).catch(() => undefined))
-        } else {
+        } else if (s.ctxwarn) {
           void notice($, `Context ${pct}%: nên /compact (hoặc /mods autocompact để tự làm)`)
         }
       }
@@ -2530,14 +2856,50 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const [P, s] = await look($)
+    const [[P, s], held] = await Promise.all([look($), read($, blast)])
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    // A held command: drawn even with the band off, it is the only place to answer.
+    // Digits answer from an empty prompt; Cancel holds the focus, so Enter cancels.
+    const hold = held ? (
+      <Box key="blast" flexDirection="column" borderStyle="round" borderColor={P.warn} paddingX={1} marginBottom={1}>
+        <Box flexDirection="row" gap={1}>
+          <Text color={P.warn} bold>
+            ⚠ Đang giữ lệnh:
+          </Text>
+          <Text wrap="wrap">{held.command}</Text>
+        </Box>
+        <Text color={P.err} bold wrap="wrap">
+          {held.title}
+        </Text>
+        {held.lines.map(line => (
+          <Text color={P.muted} wrap="truncate-middle">{`  ${line}`}</Text>
+        ))}
+        {held.note ? <Text color={P.muted}>{`  ${held.note}`}</Text> : null}
+        <Box flexDirection="row" gap={2} marginTop={1}>
+          <Button key="blast-run" label="Chạy" hotkey="1" plain onPress={() => void answerBlast($, held.id, 'run')} />
+          <Button
+            key="blast-cancel"
+            label="Hủy"
+            hotkey="2"
+            plain
+            autoFocus
+            onPress={() => void answerBlast($, held.id, 'cancel')}
+          />
+        </Box>
+      </Box>
+    ) : null
     if (e.props.hasSurvey || !s.band) {
       // Nothing of ours is drawn: the effect timer has nowhere to paint.
       bandSite = null
-      return next(e)
+      if (!hold) return next(e)
+      return (
+        <Box flexDirection="column" width={e.props.bodyColumns}>
+          {hold}
+          {await next(e)}
+        </Box>
+      )
     }
-    const t = $.ui.resolve(e)
-    const { Box, Text, Button } = t
     const Raster = 'Raster' in t ? t.Raster : undefined
     const Image = 'Image' in t ? t.Image : undefined
     // One round trip for everything the band draws, not one per value.
@@ -2586,7 +2948,7 @@ export const register: Register = on => {
     const stateColor = working ? P.warn : prev && prev.failed > 0 ? P.err : P.ok
 
     // Segments: [text, role color]; drawn plain or as powerline blocks.
-    type Segment = { text: string; color: string; meter?: { pct: number }; right?: true }
+    type Segment = { text: string; color: string; meter?: { pct: number }; right?: true; after?: string }
     const segments: Segment[] = []
     if (repo)
       segments.push({ text: `⎇ ${repo.branch}${repo.changed > 0 ? ` ±${repo.changed}` : ' ✓'}`, color: P.violet })
@@ -2600,7 +2962,13 @@ export const register: Register = on => {
             }
           : { text: 'sẵn sàng', color: P.ok },
     )
-    if (pct !== null) segments.push({ text: 'ctx', color: P.info, meter: { pct } })
+    // Token weather: how full the context is, at a glance, and what the last turn added.
+    if (pct !== null)
+      segments.push(
+        s.weather
+          ? { text: `${weatherOf(pct)} ctx`, color: P.info, meter: { pct }, after: kTokens(use?.added) }
+          : { text: 'ctx', color: P.info, meter: { pct } },
+      )
     for (const l of limits)
       segments.push({ text: LIMIT_LABEL[l.kind] ?? l.kind, color: P.cyan, meter: { pct: l.percent } })
     if (use?.usd != null) segments.push({ text: `$${use.usd.toFixed(2)}`, color: P.pink, right: true })
@@ -2645,6 +3013,7 @@ export const register: Register = on => {
         <Box flexDirection="row">
           <Text color={P.muted}>{label(seg)}</Text>
           {meterRuns(seg)}
+          {seg.after ? <Text color={P.muted}>{` ${seg.after}`}</Text> : null}
         </Box>
       ))
 
@@ -2747,6 +3116,11 @@ export const register: Register = on => {
           <Text color={P.info} wrap="wrap">
             {hello.tip}
           </Text>
+          {s.fun && hello.forecast ? (
+            <Text color={P.violet} wrap="wrap">
+              {hello.forecast}
+            </Text>
+          ) : null}
         </Box>
       </Box>
     )
@@ -2762,6 +3136,7 @@ export const register: Register = on => {
         width={e.props.bodyColumns}
         {...(s.statecolor ? { borderStyle: 'round', borderColor: stateColor, paddingX: 1 } : {})}
       >
+        {hold}
         {/* Notices: one line each behind a rounded mark in their color, not a boxed card. */}
         {cards.length > 0 && (
           <Box flexDirection="column" marginBottom={1}>
@@ -3645,8 +4020,17 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    if (!(await read($, settings)).decor) return next(e)
-    return next({ ...e, props: { ...e.props, word: SPINNER_WORDS[e.props.mode] } })
+    const s = await read($, settings)
+    if (!s.decor && !s.fun) return next(e)
+    return next({
+      ...e,
+      props: {
+        ...e.props,
+        ...(s.decor ? { word: SPINNER_WORDS[e.props.mode] } : {}),
+        // One joke per turn, picked when the turn starts.
+        ...(s.fun ? { suffix: `${e.props.suffix} · ${JOKES[jokeAt % JOKES.length]}` } : {}),
+      },
+    })
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {

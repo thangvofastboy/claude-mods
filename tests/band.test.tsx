@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { kTokens, weatherOf } from '../hooks/register'
 
 const BAND = {
   plugin: 'terminal-polish',
@@ -87,3 +88,16 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await pane.unmount()
   })
 }
+
+test('token weather: the forecast follows the fill, the delta reads short', async () => {
+  expect([10, 30, 60, 80, 95].map(weatherOf)).toEqual(['☀', '☁', '☂', '☇', '↯'])
+  expect([null, 0, -5, 850, 1234, 98_300, 1_250_000].map(kTokens)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+    '+850',
+    '+1.2k',
+    '+98k',
+    '+1.3M',
+  ])
+})

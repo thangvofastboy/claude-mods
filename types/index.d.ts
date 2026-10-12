@@ -19,6 +19,10 @@ export type Settings = {
   gradient: boolean
   powerline: boolean
   compact: boolean
+  weather: boolean
+  blast: boolean
+  fun: boolean
+  ctxwarn: boolean
   meters: boolean
   statecolor: boolean
   fileicons: boolean
@@ -42,7 +46,14 @@ export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number; edits: number }
 export type LastTurn = { seconds: number; tools: number; failed: number }
 export type Limit = { kind: string; percent: number }
-export type Usage = { percent: number | null; usd: number | null; limits: Limit[] }
+export type Usage = {
+  percent: number | null
+  usd: number | null
+  limits: Limit[]
+  // Context tokens now, and how many the last reading added (null before a second reading).
+  tokens?: number | null
+  added?: number | null
+}
 export type Totals = { turns: number; seconds: number; tools: number }
 export type Found = { role: 'user' | 'assistant'; snippet: string }
 export type TimerState = { endsAt: number; left: number }
@@ -57,7 +68,9 @@ export type CheckResult = { ok: boolean; command: string; output: string; at: nu
 export type Category = { name: string; tokens: number; color: string }
 export type Breakdown = { categories: Category[]; total: number; max: number }
 export type Notice = { id: number; icon: string; kind: 'ok' | 'err' | 'warn' | 'info' | 'pink'; text: string }
-export type SplashInfo = { greeting: string; last: string; tip: string }
+export type SplashInfo = { greeting: string; last: string; tip: string; forecast?: string }
+// A risky shell command held until the person runs or cancels it, and what it would change.
+export type Blast = { id: string; command: string; title: string; lines: string[]; note: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -105,6 +118,7 @@ declare module 'claude-code' {
       budgetWarned: string
       spentToday: number
       budgetLimit: number
+      blast: Blast | null
     }
   }
 }
