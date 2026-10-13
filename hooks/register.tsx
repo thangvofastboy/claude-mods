@@ -1439,6 +1439,31 @@ export const JOKES = [
   'Ước gì đời cũng có Ctrl+Z',
   'Uống nước đi, code chờ được',
   'Claude không mệt, nhưng bạn nên nghỉ mắt 20 giây',
+  'Tab hay space? Đừng hỏi, hỏi là có chiến tranh tôn giáo',
+  'Khách bảo "đơn giản thôi": đơn giản kiểu ba tháng',
+  'Dev nói "chỉ sửa một dòng", và 47 file đã đổi',
+  'Đừng gọi là bug, gọi là easter egg',
+  'Lỗi 404 không phải trang không tồn tại, mà là trang đi chơi',
+  'Bug không biến mất, nó ngủ đông sang bản release sau',
+  'Build 20 phút, đủ uống thêm một ly cà phê và đặt lại tên biến',
+  'Xoá được một dòng code cũ là cảm giác sảng khoái nhất nghề',
+  'Đổi tên biến cho đẹp, rồi đổi lại vì tên cũ dễ hiểu hơn',
+  'Sprint planning: hứa nhiều, làm vừa, retro thì kể chuyện',
+  'Tôi không lười, tôi đang tối ưu thời gian chờ build',
+  'Code review ghi "ổn": nghĩa là chưa đọc kỹ',
+  'Code legacy do chính bạn 6 tháng trước viết, và hắn ghét bạn',
+  'Sếp hỏi "xong chưa?" là câu không có đáp án đúng',
+  'Ước tính 2 ngày, thực tế 2 quý, production là môi trường test cuối',
+  'Commit "fix" lúc 3 giờ sáng, sáng mai đọc lại và cầu nguyện',
+  'Ngày nào không có warning là ngày đáng ngờ',
+  'Test không bỏ qua bạn, chỉ là bạn bỏ qua test',
+  'Không biết vì sao nó chạy? Đừng đụng vào, cảm ơn',
+  'Xoá node_modules, cài lại, cầu nguyện, lặp lại',
+  'Feature freeze là lúc mọi feature bắt đầu nảy mầm',
+  'Refactor xong: code mới, bug mới, ra mắt cùng lúc',
+  'Estimate là con số để sếp có cái mà tin',
+  'Tài liệu hướng dẫn là thứ ai cũng nói sẽ viết sau',
+  'Chạy được trên máy tôi là lời tuyên bố chính thức của mọi dev',
 ]
 
 const FORECAST_SKY = [
@@ -3037,6 +3062,28 @@ export const register: Register = on => {
 
     // Powerline: each segment a colored block, joined by  in the next block's color.
     const POWER = ''
+    // A key row, survey style (`s: Session`), dim until pointed at.
+    const keys: [string, string, string, () => unknown][] = [
+      ['sessions', 'Session', 's', () => void openPeers($)],
+      ['dash', 'Bảng', 'd', () => void openDash($)],
+      ['prompts', 'Prompt', 'p', () => void openPrompts($)],
+      ['settings', 'Cài đặt', 'c', () => void openSettings($)],
+      ['sel', 'Chọn', 'v', () => void grabSelection($)],
+      ['hide', 'Ẩn', 'h', () => setSetting($, 'band', false)],
+    ]
+    const buttons = (
+      <Box flexDirection="row" flexWrap="wrap">
+        {keys.map(([key, text, hotkey, onPress], i) => (
+          <Box flexDirection="row">
+            {i > 0 ? <Text color={P.muted}>{' · '}</Text> : null}
+            <Button key={key} label={text} hotkey={hotkey} plain dimColor onPress={onPress} />
+          </Box>
+        ))}
+      </Box>
+    )
+    // The key row sits at the right of the header, saving a line; powerline and compact keep it below.
+    const sideKeys = !s.powerline && !s.compact
+
     const status = s.powerline ? (
       <Box flexDirection="row" flexWrap="wrap">
         <Text backgroundColor={P.accent} color={P.ink} bold>{` ◆ ${name} `}</Text>
@@ -3066,39 +3113,22 @@ export const register: Register = on => {
               ))}
             {s.compact ? gauges : null}
           </Box>
-          {segments
-            .filter(seg => seg.right)
-            .map(seg => (
-              <Text color={seg.color} bold>
-                {seg.text}
-              </Text>
-            ))}
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {segments
+              .filter(seg => seg.right)
+              .map(seg => (
+                <Text color={seg.color} bold>
+                  {seg.text}
+                </Text>
+              ))}
+            {sideKeys ? buttons : null}
+          </Box>
         </Box>
         {!s.compact && gauges.length > 0 && (
           <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
             {gauges}
           </Box>
         )}
-      </Box>
-    )
-
-    // A key row, survey style (`s: Session`), dim until pointed at.
-    const keys: [string, string, string, () => unknown][] = [
-      ['sessions', 'Session', 's', () => void openPeers($)],
-      ['dash', 'Bảng', 'd', () => void openDash($)],
-      ['prompts', 'Prompt', 'p', () => void openPrompts($)],
-      ['settings', 'Cài đặt', 'c', () => void openSettings($)],
-      ['sel', 'Chọn', 'v', () => void grabSelection($)],
-      ['hide', 'Ẩn', 'h', () => setSetting($, 'band', false)],
-    ]
-    const buttons = (
-      <Box flexDirection="row" flexWrap="wrap">
-        {keys.map(([key, text, hotkey, onPress], i) => (
-          <Box flexDirection="row">
-            {i > 0 ? <Text color={P.muted}>{' · '}</Text> : null}
-            <Button key={key} label={text} hotkey={hotkey} plain dimColor onPress={onPress} />
-          </Box>
-        ))}
       </Box>
     )
 
@@ -3171,7 +3201,7 @@ export const register: Register = on => {
         )}
         {welcome}
         {status}
-        {buttons}
+        {!sideKeys && buttons}
         {strip}
       </Box>
     )
