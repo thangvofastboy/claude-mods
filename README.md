@@ -55,7 +55,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ☂ | **Thời tiết context** | Thanh `ctx` có biểu tượng thời tiết theo độ đầy: ☀ dưới 25% · ☁ dưới 50% · ☂ dưới 75% · ☇ dưới 90% · ↯ sắp phải compact, kèm số token lượt trước vừa thêm (`+12k`). Tắt: `/mods weather`. |
 | ✨ | **Hiệu ứng** | Vệt sáng chạy ngang khi Claude đang làm; pháo hoa 🎉 khi test pass hoặc xong một việc dài không lỗi. |
 | 😄 | **Câu vui & dự báo hài** | Mỗi lượt một câu đùa dân code cạnh spinner (`Đang nghĩ · Code chạy được đừng hỏi tại sao`); màn chào có *dự báo hôm nay* (giữ nguyên cả ngày). `/mods vui` để xem thêm; tắt: `/mods fun`. |
-| 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; tự ẩn khi bạn gửi prompt đầu tiên. |
+| 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; giữ nguyên, trừ khi bật `splashhide` thì tự ẩn khi bạn gửi prompt đầu tiên. |
 | 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
 | 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
 | 💬 | **Thẻ tin nhắn** | Prompt bạn gõ có ngoặc bo tròn `╭ │ ╰` màu nhấn bên trái, dễ phân biệt với câu trả lời mà không tốn thêm dòng. |

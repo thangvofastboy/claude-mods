@@ -81,6 +81,7 @@ const DEFAULTS: Settings = {
   anim: true,
   confetti: true,
   splash: true,
+  splashhide: false,
   heatmap: true,
   hovercards: true,
   images: true,
@@ -125,6 +126,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   anim: 'vệt sáng chạy khi Claude đang làm (chỉ terminal)',
   confetti: 'thông báo "Test pass!" và pháo hoa khi test pass hoặc xong việc dài (pháo hoa chỉ ở terminal)',
   splash: 'màn chào khi mở session',
+  splashhide: 'tự ẩn màn chào khi gửi prompt đầu tiên (tắt: màn chào giữ nguyên)',
   heatmap: 'heatmap hoạt động 8 tuần trong bảng hoạt động',
   hovercards: 'đổi màu dòng khi rê chuột (fullscreen)',
   images: 'ảnh logo ở màn chào và thumbnail ảnh đã paste (kitty/Ghostty; nút mở ảnh luôn có)',
@@ -156,6 +158,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
     'badges',
     'collapse',
     'splash',
+    'splashhide',
     'heatmap',
     'hovercards',
     'images',
@@ -2573,13 +2576,13 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
-    const [, , , effect, s] = await Promise.all([
+    const [, , effect, s] = await Promise.all([
       update($, turn, () => value),
       update($, autoModel, () => null),
-      update($, splash, () => false),
       read($, fx),
       read($, settings),
     ])
+    if (s.splashhide) await update($, splash, () => false)
     if (effect !== 'party') void startFx($, 'comet')
     if (s.automodel && e.text.trim()) {
       try {
