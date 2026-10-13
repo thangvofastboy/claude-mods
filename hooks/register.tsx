@@ -3081,8 +3081,8 @@ export const register: Register = on => {
         ))}
       </Box>
     )
-    // The key row sits at the right of the header, saving a line; powerline and compact keep it below.
-    const sideKeys = !s.powerline && !s.compact
+    // The key row sits at the right of the header, saving a line; only powerline keeps it below.
+    const sideKeys = !s.powerline
 
     const status = s.powerline ? (
       <Box flexDirection="row" flexWrap="wrap">
