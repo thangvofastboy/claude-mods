@@ -14,6 +14,16 @@
       },
       "version": "0.8.4",
       "description": "/mods: status band, sessions sidebar, activity dashboard, quick prompts, command guard, TL;DR and notifications"
+    },
+    {
+      "name": "tutien",
+      "source": {
+        "source": "github",
+        "repo": "thangvofastboy/tutien",
+        "ref": "v0.1.4"
+      },
+      "version": "0.1.4",
+      "description": "/tutien: mini game tu tiên 33 bậc tính theo token đã dùng, có bảng xếp hạng, tông môn và trang web"
     }
   ]
 }
