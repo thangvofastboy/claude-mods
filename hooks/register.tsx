@@ -94,6 +94,7 @@ const DEFAULTS: Settings = {
   compactplus: true,
   todos: true,
   notices: true,
+  autoupdate: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -139,6 +140,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   compactplus: 'giữ file đã sửa, luật và TODO khi /compact',
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
+  autoupdate: 'tự cập nhật plugin lên tag mới nhất khi mở Claude (kiểm tra tối đa 6 giờ một lần, chỉ bản cài từ marketplace)',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 // The settings tab's groups; anything not listed falls into "Khác".
@@ -167,7 +169,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
   'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock'],
   'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos'],
-  'Tự động': ['format', 'autocheck'],
+  'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
 // Left out of "Bật hết": turned on one at a time, knowingly.
@@ -465,29 +467,53 @@ async function refreshGit($: EngineInterface) {
   }
 }
 
-async function refreshUsage($: EngineInterface) {
+// session.usage() asks the rate-limit endpoint, which answers 429 when hit once per
+// turn. Skip calls inside the wait; every failure doubles it, a success resets it.
+const USAGE_MIN_MS = 30_000
+const USAGE_MAX_BACKOFF_MS = 10 * 60_000
+let usageNextAt = 0
+let usageWait = USAGE_MIN_MS
+let usageBusy = false
+
+export async function refreshUsage($: EngineInterface, force = false) {
+  if (usageBusy) return
+  usageBusy = true
   try {
-    const [u, before] = await Promise.all([$.session.usage(), read($, usage)])
-    const tokens = u.context.tokens ?? null
-    const value: Usage = {
-      percent: u.context.percent ?? null,
-      usd: u.cost?.usd ?? null,
-      limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
-      tokens,
-      // Unchanged tokens keep the last turn's figure; a drop (/compact, /clear) clears it.
-      added:
-        tokens == null || before?.tokens == null
-          ? null
-          : tokens === before.tokens
-            ? (before.added ?? null)
-            : tokens > before.tokens
-              ? tokens - before.tokens
-              : null,
+    if (!force && (await $.clock.now()) < usageNextAt) return
+    try {
+      await fetchUsage($)
+      usageWait = USAGE_MIN_MS
+    } catch {
+      // Usage is decoration: the band keeps the last figure and we back off.
+      usageWait = Math.min(usageWait * 2, USAGE_MAX_BACKOFF_MS)
     }
-    if (!same(before, value)) await update($, usage, () => value)
+    usageNextAt = (await $.clock.now()) + usageWait
   } catch {
-    // Usage is decoration: the band simply leaves it out.
+    // No clock: nothing to throttle with, the band simply leaves usage out.
+  } finally {
+    usageBusy = false
   }
+}
+
+async function fetchUsage($: EngineInterface) {
+  const [u, before] = await Promise.all([$.session.usage(), read($, usage)])
+  const tokens = u.context.tokens ?? null
+  const value: Usage = {
+    percent: u.context.percent ?? null,
+    usd: u.cost?.usd ?? null,
+    limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
+    tokens,
+    // Unchanged tokens keep the last turn's figure; a drop (/compact, /clear) clears it.
+    added:
+      tokens == null || before?.tokens == null
+        ? null
+        : tokens === before.tokens
+          ? (before.added ?? null)
+          : tokens > before.tokens
+            ? tokens - before.tokens
+            : null,
+  }
+  if (!same(before, value)) await update($, usage, () => value)
 }
 
 // ponytail: reads Claude Code's own ~/.claude/sessions/<pid>.json, an internal
@@ -537,7 +563,10 @@ async function refreshAgents($: EngineInterface) {
 
 // The sessions list and the subagent rows are only drawn in their panes: poll
 // while one is in front, not all session long.
+let polling = false
 export async function pollPanes($: EngineInterface) {
+  if (polling) return
+  polling = true
   try {
     const shown = new Set((await $.ui.panes()).filter(p => p.isShown).map(p => p.id))
     await Promise.all([
@@ -546,6 +575,8 @@ export async function pollPanes($: EngineInterface) {
     ])
   } catch {
     // A missed round; the next tick tries again.
+  } finally {
+    polling = false
   }
 }
 
@@ -688,6 +719,21 @@ async function updatePlugin($: EngineInterface) {
     `✓ v${current} → ${latest ?? 'bản mới nhất'}`,
     '🔄 Đang nạp lại plugin (/reload-plugins)...',
   ].join('\n')
+}
+
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000
+
+// On start: at most one check per UPDATE_CHECK_MS, only for a marketplace install.
+// A failed check still counts, so an offline start does not retry on every launch.
+export async function autoUpdate($: EngineInterface) {
+  if (!(await read($, settings)).autoupdate) return
+  if (!$.plugin.root.includes('/.claude/plugins/cache/')) return
+  const now = await $.clock.now()
+  if (now - (Number(await $.store.get('updateCheckedAt')) || 0) < UPDATE_CHECK_MS) return
+  await $.store.set('updateCheckedAt', now)
+  const text = await updatePlugin($)
+  if (text.startsWith('✗')) void notice($, `terminal-polish: ${text.split('\n')[0]}`)
+  else if (text.includes('✓')) void notice($, '🔄 terminal-polish: đã cập nhật, đang nạp lại plugin')
 }
 
 // Token weather (after Anthropic's token-weather sample mod): the context's fill as a forecast.
@@ -878,9 +924,10 @@ async function timerCommand($: EngineInterface, rest: string) {
     await update($, timer, () => null)
     return t ? 'Đã hủy hẹn giờ.' : 'Cách dùng: /mods timer <phút>   (không số: hủy)'
   }
-  const endsAt = (await $.clock.now()) + Math.min(minutes, 24 * 60) * 60000
+  const clamped = Math.min(minutes, 24 * 60)
+  const endsAt = (await $.clock.now()) + clamped * 60000
   await armTimer($, endsAt)
-  return `⏱ Hẹn giờ ${minutes} phút.`
+  return `⏱ Hẹn giờ ${clamped} phút.`
 }
 
 // ---- pasted images: a thumbnail under the prompt's [Image #n], a press opens the file
@@ -1325,8 +1372,10 @@ function stopFx() {
 async function startFx($: EngineInterface, mode: 'comet' | 'party') {
   const [s, P] = await Promise.all([read($, settings), palette($)])
   if (!s.band || (mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
-  // Stop and start with no await between, so two overlapping calls cannot both
-  // leave a timer running.
+  // fx is set before the timer exists, so an endFx landing in the gap sees the mode
+  // and stops it. Stop and start have no await between, so two overlapping calls
+  // cannot both leave a timer running.
+  await update($, fx, () => mode)
   stopFx()
   fxTick = 0
   fxTimer = $.clock.every(FX_MS, () => {
@@ -1337,7 +1386,6 @@ async function startFx($: EngineInterface, mode: 'comet' | 'party') {
   if (mode === 'party') {
     partyTimer = $.clock.after(PARTY_MS, () => void endFx($, 'party'))
   }
-  await update($, fx, () => mode)
 }
 
 async function endFx($: EngineInterface, mode: 'comet' | 'party') {
@@ -2078,6 +2126,7 @@ const BLAST_WAIT_MS = 10 * 60 * 1000
 const BLAST_ROWS = 8
 const BLAST_MEASURE = 200
 const blastAnswers = new Map<string, 'run' | 'cancel'>()
+const blastWaiters = new Map<string, () => void>()
 // Off in `claude -p` and the SDK: nobody is there to press a button.
 let interactive = true
 // One hold at a time (parallel subagents): the card has one slot, so a second waits its turn.
@@ -2196,19 +2245,25 @@ async function holdOne($: EngineInterface, id: string, command: string, kinds: B
   await update($, blast, () => ({ id, command: label, ...report }))
   void notice($, '⚠ Đang giữ một lệnh rủi ro: xem trên dải trạng thái; ô prompt trống thì bấm 1 chạy / 2 hủy, hoặc bấm chuột')
   try {
-    const until = (await $.clock.now()) + BLAST_WAIT_MS
-    while (!blastAnswers.has(id) && !signal.aborted && (await $.clock.now()) < until) {
-      await $.process.run(['sleep', '0.5'], { timeoutMs: 3000 })
-    }
+    await new Promise<void>(resolve => {
+      if (blastAnswers.has(id) || signal.aborted) return resolve()
+      let timeout: { cancel(): void } | undefined
+      const wake = () => (timeout?.cancel(), resolve())
+      blastWaiters.set(id, wake)
+      signal.addEventListener('abort', wake, { once: true })
+      timeout = $.clock.after(BLAST_WAIT_MS, resolve)
+    })
     return blastAnswers.get(id) ?? (signal.aborted ? 'cancel' : 'timeout')
   } finally {
     blastAnswers.delete(id)
+    blastWaiters.delete(id)
     await update($, blast, b => (b?.id === id ? null : b))
   }
 }
 
 export const answerBlast = ($: EngineInterface, id: string, answer: 'run' | 'cancel') => {
   blastAnswers.set(id, answer)
+  blastWaiters.get(id)?.()
   return update($, blast, b => (b?.id === id ? null : b))
 }
 
@@ -2424,6 +2479,7 @@ export const register: Register = on => {
     await Promise.all([loadState($), refreshGit($), loadClock(), loadTools()])
     await pollPanes($)
     $.clock.every(POLL_MS, () => void pollPanes($))
+    void autoUpdate($).catch(() => undefined)
 
     return ran
   })
@@ -2839,13 +2895,17 @@ export const register: Register = on => {
     } catch {
       // Extras never hold the turn up.
     }
-    await Promise.all([
-      update($, last, () => done),
-      update($, history, list => [...list, done].slice(-20)),
-      update($, turn, () => null),
-      update($, autoModel, () => null),
-    ])
-    await endFx($, 'comet')
+    try {
+      await Promise.all([
+        update($, last, () => done),
+        update($, history, list => [...list, done].slice(-20)),
+        update($, turn, () => null),
+        update($, autoModel, () => null),
+      ])
+      await endFx($, 'comet')
+    } catch {
+      // The rest (stats, git, TL;DR) still runs.
+    }
     if (done.seconds >= TOAST_SECONDS && done.failed === 0 && !e.isAborted) void startFx($, 'party')
     await update($, totals, x => ({
       turns: x.turns + 1,
@@ -2861,7 +2921,7 @@ export const register: Register = on => {
       if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
       if (s.voice) void $.audio.speak('Claude đã xong').catch(() => undefined)
     }
-    await Promise.all([refreshGit($), refreshUsage($)])
+    await Promise.all([refreshGit($), refreshUsage($, true)])
     try {
       const use = await read($, usage)
       const before = await read($, lastUsd)

@@ -219,7 +219,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `notices` thẻ thông báo màu | ✅ | | `hovercards` đổi màu khi rê chuột | ✅ |
 | `compact` dải trạng thái 1 hàng | ⬜ | | `weather` thời tiết context | ✅ |
 | `blast` xem trước lệnh rủi ro | ✅ | | `fun` câu vui & dự báo hài | ✅ |
-| `ctxwarn` nhắc /compact | ✅ | | | |
+| `ctxwarn` nhắc /compact | ✅ | | `autoupdate` tự cập nhật khi mở Claude | ✅ |
 
 ---
 

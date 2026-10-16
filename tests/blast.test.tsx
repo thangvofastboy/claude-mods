@@ -47,13 +47,12 @@ for (const [answer, expected] of [
         get: async () => ({ value: undefined, version: 0 }),
         set: async (_ref: unknown, value: unknown) => (shown.push(value), { isSet: true, version: 1 }),
       },
-      clock: { now: async () => 0, after: () => ({ cancel() {} }) },
+      clock: { now: async () => 0, after: (ms: number) => (ms === 600_000 && answerBlast($, 'call-1', answer), { cancel() {} }) },
       ui: { toast: () => undefined },
       session: { cwd: async () => '/work/app' },
       process: {
         run: async (argv: string[]) => {
           const [cmd, , script] = argv
-          if (cmd === 'sleep') void answerBlast($, 'call-1', answer)
           const stdout =
             cmd === 'du' ? '2048\tbuild\n2048\ttotal\n' : cmd === 'sh' && script?.startsWith('for p') ? 'build\n' : cmd === 'sh' ? '12\n' : ''
           return { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
@@ -66,7 +65,7 @@ for (const [answer, expected] of [
       expect.objectContaining({ title: 'rm sẽ xóa 12 file (2.0 MB) trong 1 mục', lines: ['build'] }),
     )
     // The card is taken down once answered.
-    expect(shown.at(-1)).toBeNull()
+    expect(shown.filter(v => !Array.isArray(v)).at(-1)).toBeNull()
   })
 }
 
@@ -74,12 +73,11 @@ test('Esc during a hold cancels it', async () => {
   const stop = new AbortController()
   const $ = {
     state: { get: async () => ({ value: undefined, version: 0 }), set: async () => ({ isSet: true, version: 1 }) },
-    clock: { now: async () => 0, after: () => ({ cancel() {} }) },
+    clock: { now: async () => 0, after: (ms: number) => (ms === 600_000 && stop.abort(), { cancel() {} }) },
     ui: { toast: () => undefined },
     session: { cwd: async () => '/work/app' },
     process: {
       run: async (argv: string[]) => {
-        if (argv[0] === 'sleep') stop.abort()
         return { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
       },
     },
@@ -98,13 +96,12 @@ test('measuring a held rm passes paths as paths and never guesses', async () => 
         get: async () => ({ value: undefined, version: 0 }),
         set: async (_ref: unknown, value: unknown) => (shown.push((value ?? {}) as never), { isSet: true, version: 1 }),
       },
-      clock: { now: async () => 0, after: () => ({ cancel() {} }) },
+      clock: { now: async () => 0, after: () => (void answerBlast(fake(found), 'm', 'cancel'), { cancel() {} }) },
       ui: { toast: () => undefined },
       session: { cwd: async () => '/work/app' },
       process: {
         run: async (argv: string[]) => {
           runs.push(argv)
-          if (argv[0] === 'sleep') void answerBlast(fake(found), 'm', 'cancel')
           const stdout = argv[0] === 'sh' && argv[2]?.startsWith('for p') ? found : argv[0] === 'du' ? '4\ttotal\n' : '1\n'
           return { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
         },
@@ -136,12 +133,11 @@ for (const [answer, denied] of [
   test(`the shared Bash/Monitor hold denies unless Run (${answer})`, async () => {
     const $ = {
       state: { get: async () => ({ value: undefined, version: 0 }), set: async () => ({ isSet: true, version: 1 }) },
-      clock: { now: async () => 0, after: () => ({ cancel() {} }) },
+      clock: { now: async () => 0, after: (ms: number) => (ms === 600_000 && answerBlast($, 'mon-1', answer), { cancel() {} }) },
       ui: { toast: () => undefined },
       session: { cwd: async () => '/work/app' },
       process: {
         run: async (argv: string[]) => {
-          if (argv[0] === 'sleep') void answerBlast($, 'mon-1', answer)
           return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
         },
       },
