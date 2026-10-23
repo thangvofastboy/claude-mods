@@ -58,7 +58,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 👋 | **Màn chào** | Logo, lời chào theo giờ, số liệu lần làm việc trước và một mẹo dùng; giữ nguyên, trừ khi bật `splashhide` thì tự ẩn khi bạn gửi prompt đầu tiên. |
 | 🏷️ | **Badge tool** | Dòng Bash, Read, Grep, Glob, Agent, Web và MCP có nhãn màu kèm ✓ / ✗ / ◌. Edit và Write giữ cách hiển thị gốc để không mất diff. |
 | 📦 | **Thu gọn output** | Output Bash dài chỉ hiện 3 dòng đầu; bấm vào để mở đầy đủ. |
-| 💬 | **Thẻ tin nhắn** | Prompt bạn gõ có ngoặc bo tròn `╭ │ ╰` màu nhấn bên trái, dễ phân biệt với câu trả lời mà không tốn thêm dòng. |
+| 💬 | **Khung tin nhắn** | Prompt bạn gõ nằm trong khung bo tròn màu nhấn, nổi bật hơn hẳn câu trả lời. Tắt `frame` để quay về ngoặc `╭ │ ╰` bên trái (`cards`), không tốn thêm dòng. |
 | 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
@@ -200,7 +200,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | Tên | Mặc định | | Tên | Mặc định |
 | --- | :-: | --- | --- | :-: |
 | `band` dải trạng thái | ✅ | | `secrets` quét secret | ✅ |
-| `cards` ngoặc bo tin nhắn | ✅ | | `budget` ngân sách | ✅ |
+| `frame` khung tin nhắn (tắt thì dùng `cards`: ngoặc bên trái) | ✅ | | `budget` ngân sách | ✅ |
 | `tldr` tóm tắt câu trả lời | ✅ | | `checkpoints` lưu bản cũ | ✅ |
 | `notify` thông báo | ✅ | | `branchlock` khóa nhánh | ⬜ |
 | `sound` âm thanh | ⬜ | | `format` tự format | ⬜ |
