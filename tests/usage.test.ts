@@ -34,4 +34,13 @@ test('usage refresh is throttled and backs off after a failure', async () => {
   now += 10_000
   await refreshUsage($)
   expect(calls).toBe(2) // throttled
+  await refreshUsage($, true)
+  expect(calls).toBe(3) // force skips the 30 s floor after a success
+  fail = true
+  now += 1_000
+  await refreshUsage($, true)
+  expect(calls).toBe(4) // fails -> wait doubles to 60 s
+  now += 1_000
+  await refreshUsage($, true)
+  expect(calls).toBe(4) // force does not skip a failure backoff
 })

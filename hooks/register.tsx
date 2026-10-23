@@ -53,6 +53,7 @@ const PLUGIN_ID = `terminal-polish@${MARKETPLACE}`
 const DEFAULTS: Settings = {
   band: true,
   cards: true,
+  frame: true,
   tldr: true,
   notify: true,
   sound: false,
@@ -98,7 +99,8 @@ const DEFAULTS: Settings = {
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
-  cards: 'ngoặc bo tròn bên trái tin nhắn của bạn',
+  cards: 'ngoặc bo tròn bên trái tin nhắn của bạn (khi tắt `frame`)',
+  frame: 'khung bo tròn bao quanh tin nhắn của bạn, dễ nhận ra hơn ngoặc bên trái',
   tldr: 'TL;DR dưới câu trả lời dài (tốn thêm token haiku)',
   notify: 'báo khi lượt dài xong (thẻ trên dải trạng thái và thông báo hệ điều hành)',
   sound: 'âm thanh khi lượt dài xong',
@@ -148,6 +150,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   'Giao diện': [
     'band',
     'cards',
+    'frame',
     'decor',
     'quota',
     'gradient',
@@ -275,18 +278,24 @@ const RM_TARGETS = new Set([
   '${HOME}/*',
 ])
 
-function rmDanger(words: string[]) {
-  const at = words.findIndex(w => w === 'rm' || w.endsWith('/rm'))
-  if (at < 0) return false
+// The words after `rm`: is it recursive, and what does it remove.
+function rmArgs(args: string[]) {
   let recursive = false
   let endOfFlags = false
   const targets: string[] = []
-  for (const w of words.slice(at + 1)) {
+  for (const w of args) {
     if (!endOfFlags && w === '--') endOfFlags = true
     else if (!endOfFlags && w.startsWith('--')) recursive ||= w === '--recursive'
     else if (!endOfFlags && /^-[a-zA-Z]+$/.test(w)) recursive ||= /[rR]/.test(w)
     else targets.push(w)
   }
+  return { recursive, targets }
+}
+
+function rmDanger(words: string[]) {
+  const at = words.findIndex(w => w === 'rm' || w.endsWith('/rm'))
+  if (at < 0) return false
+  const { recursive, targets } = rmArgs(words.slice(at + 1))
   return recursive && targets.some(t => RM_TARGETS.has(t))
 }
 
@@ -382,10 +391,6 @@ function shortLabel(label: string) {
   }
 }
 
-// Rows a hover card takes at a width: its wrapped lines plus the border.
-const cardHeight = (lines: string[], width: number) =>
-  lines.reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / Math.max(1, width - 4))), 0) + 2
-
 // Split, not one regex with \s* on both sides of the newline: linear on any input.
 const commandLabel = (command: string) =>
   command
@@ -479,7 +484,8 @@ export async function refreshUsage($: EngineInterface, force = false) {
   if (usageBusy) return
   usageBusy = true
   try {
-    if (!force && (await $.clock.now()) < usageNextAt) return
+    // force skips the 30 s floor, never a failure backoff: a 429 run must not retry every turn.
+    if ((!force || usageWait > USAGE_MIN_MS) && (await $.clock.now()) < usageNextAt) return
     try {
       await fetchUsage($)
       usageWait = USAGE_MIN_MS
@@ -848,8 +854,7 @@ async function abbrevCommand($: EngineInterface, rest: string) {
 // ---- project rules (17): per project root, added to the system prompt
 async function loadRules($: EngineInterface) {
   const raw = await $.store.get('rules')
-  const all = raw && typeof raw === 'object' ? (raw as Record<string, string[]>) : {}
-  return all
+  return raw && typeof raw === 'object' ? (raw as Record<string, string[]>) : {}
 }
 
 async function setRules($: EngineInterface, change: (list: string[]) => string[]) {
@@ -937,17 +942,27 @@ const IMAGE_TOKEN = /\[Image #\d+\]/g
 const IMAGE_MAX_BASE64 = (2 * 1024 * 1024 * 4) / 3 // Image takes 2 MiB decoded
 const picCache = new Map<string, Pic[]>()
 const PIC_CACHE_ROWS = 20
+const picMiss = new Map<string, number>() // rowId -> earliest retry
+const PIC_RETRY_MS = 3000
 const unTokened = (text: string) => text.replace(IMAGE_TOKEN, '').replace(/\s+/g, ' ').trim()
 
 async function picsFor($: EngineInterface, rowId: string, text: string): Promise<Pic[]> {
   const cached = picCache.get(rowId)
   if (cached) return cached
   if (!text.includes('[Image #')) return []
+  // A miss is retried, since the row may draw before its message is stored, but at most
+  // every few seconds: each try pulls the whole transcript with every image's base64.
+  const now = Date.now()
+  if ((picMiss.get(rowId) ?? 0) > now) return []
   const pics = matchPics(await $.session.messages({ as: 'api' }).catch(() => []), text)
   if (pics.length) {
-    picCache.set(rowId, pics) // misses not cached: the row may draw before its message is stored
+    picMiss.delete(rowId)
+    picCache.set(rowId, pics)
     // Each entry holds the images' base64 (up to MBs): keep the newest rows only.
     if (picCache.size > PIC_CACHE_ROWS) picCache.delete(picCache.keys().next().value ?? '')
+  } else {
+    picMiss.set(rowId, now + PIC_RETRY_MS)
+    if (picMiss.size > PIC_CACHE_ROWS) picMiss.delete(picMiss.keys().next().value ?? '')
   }
   return pics
 }
@@ -1372,6 +1387,8 @@ function stopFx() {
 async function startFx($: EngineInterface, mode: 'comet' | 'party') {
   const [s, P] = await Promise.all([read($, settings), palette($)])
   if (!s.band || (mode === 'comet' && !s.anim) || (mode === 'party' && !s.confetti)) return
+  // A turn that ended during the reads above already ran endFx: no comet without a turn.
+  if (mode === 'comet' && !(await read($, turn))) return
   // fx is set before the timer exists, so an endFx landing in the gap sees the mode
   // and stops it. Stop and start have no await between, so two overlapping calls
   // cannot both leave a timer running.
@@ -1655,6 +1672,16 @@ const secretIn = (text: string) => SECRET_PATTERNS.find(([re]) => re.test(text))
 let checkpointSeq = 0
 
 // Returns the checkpoint's id, so a call that then fails can take it back.
+// cp keeps the bytes: $.fs.read/write go through a string and would mangle a binary file.
+// Returns the error text, or '' on success.
+export async function copyFile($: EngineInterface, from: string, to: string) {
+  for (const argv of [['mkdir', '-p', '--', to.slice(0, to.lastIndexOf('/')) || '/'], ['cp', '--', from, to]]) {
+    const run = await $.process.run(argv, { timeoutMs: 10000 })
+    if (run.exitCode !== 0) return run.stderr.trim() || `${argv[0]} exit ${run.exitCode}`
+  }
+  return ''
+}
+
 async function snapshot($: EngineInterface, path: string) {
   const dir = await read($, home)
   if (!dir) return undefined
@@ -1662,7 +1689,8 @@ async function snapshot($: EngineInterface, path: string) {
   let copy: string | null = null
   if (await $.fs.exists(path)) {
     copy = `${dir}/.claude/mods-checkpoints/${await $.session.id()}/${id}-${baseName(path)}`
-    await $.fs.write(copy, await $.fs.read(path))
+    const failed = await copyFile($, path, copy)
+    if (failed) throw new Error(`checkpoint ${path}: ${failed}`)
   }
   const point: Checkpoint = { id, path, copy, at: await $.clock.now() }
   await update($, checkpoints, list => [...list, point].slice(-MAX_CHECKPOINTS))
@@ -1675,7 +1703,8 @@ async function undoCommand($: EngineInterface, rest: string) {
   const point = wanted[wanted.length - 1]
   if (!point) return rest ? `Không có checkpoint nào cho "${rest}".` : 'Chưa có checkpoint nào trong session này.'
   if (point.copy) {
-    await $.fs.write(point.path, await $.fs.read(point.copy))
+    const failed = await copyFile($, point.copy, point.path)
+    if (failed) return `✗ Không khôi phục được ${point.path}: ${failed}`
   } else {
     const run = await $.process.run(['rm', '--', point.path], { timeoutMs: 5000 })
     if (run.exitCode !== 0) return `✗ Không xóa được file mới ${point.path}: ${run.stderr.trim()}`
@@ -1931,6 +1960,7 @@ async function standupText($: EngineInterface) {
           ([name, r]) => `  • ${name}: ${r.turns} lượt, ${duration(r.seconds * 1000)}, $${r.usd.toFixed(2)}`,
         )
       : []
+  const [yesterdayRows, todayRows] = [day(yesterday), day(today)]
   let edited: string[] = []
   try {
     const journal = await $.fs.read(`${await read($, home)}/.claude/mods-journal.md`)
@@ -1947,9 +1977,9 @@ async function standupText($: EngineInterface) {
   return [
     `Standup ${today}`,
     `Hôm qua${yesterday ? ` (${yesterday})` : ''}:`,
-    ...(day(yesterday).length ? day(yesterday) : ['  • (không có số liệu)']),
+    ...(yesterdayRows.length ? yesterdayRows : ['  • (không có số liệu)']),
     'Hôm nay:',
-    ...(day(today).length ? day(today) : ['  • (chưa có)']),
+    ...(todayRows.length ? todayRows : ['  • (chưa có)']),
     ...(edited.length
       ? ['File đã động tới:', `  • ${[...new Set(edited.join(', ').split(', '))].slice(0, 15).join(', ')}`]
       : []),
@@ -2005,8 +2035,17 @@ async function copyCommand($: EngineInterface, rest: string) {
 }
 
 // ---- context (51)
+// Same rate-limited endpoint as refreshUsage: a press or /mods context within 10 s keeps the last
+// figure, and a failure (a 429) keeps it too instead of throwing into a void'd button handler.
+const BREAKDOWN_MIN_MS = 10_000
+let breakdownAt = 0
+
 async function refreshBreakdown($: EngineInterface) {
-  const u = await $.session.usage({ breakdown: 'summary' })
+  const now = await $.clock.now()
+  if (now - breakdownAt < BREAKDOWN_MIN_MS) return
+  breakdownAt = now
+  const u = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  if (!u) return
   const b = u.context.breakdown
   if (!b) {
     await update($, breakdown, () => null)
@@ -2045,11 +2084,16 @@ async function notice($: EngineInterface, raw: string) {
   const text = matched ? raw : /^Context/.test(raw) ? `🧠 ${raw}` : `💬 ${raw}`
   const kind: Notice['kind'] = matched?.[2] ?? (/^Context/.test(raw) ? 'warn' : 'info')
   $.ui.toast(text, { timeoutMs: NOTICE_MS })
-  if (!(await read($, settings)).notices) return
-  const [icon = '💬', ...rest] = [...text]
-  const item: Notice = { id: ++noticeSeq, icon, kind, text: rest.join('').trim() }
-  await update($, notices, l => [...l, item].slice(-3))
-  $.clock.after(NOTICE_MS, () => void update($, notices, l => l.filter(n => n.id !== item.id)))
+  // Callers fire and forget (void notice): a failed state write must not surface as an unhandled rejection.
+  try {
+    if (!(await read($, settings)).notices) return
+    const [icon = '💬', ...rest] = [...text]
+    const item: Notice = { id: ++noticeSeq, icon, kind, text: rest.join('').trim() }
+    await update($, notices, l => [...l, item].slice(-3))
+    $.clock.after(NOTICE_MS, () => void update($, notices, l => l.filter(n => n.id !== item.id)).catch(() => undefined))
+  } catch {
+    // The toast above already showed it.
+  }
 }
 
 // ---- blast radius (after Anthropic's blast-radius sample mod): a risky shell
@@ -2083,15 +2127,7 @@ export function blastAll(command: string): BlastKind[] {
     const at = commandAt(words, w => w === 'rm' || w.endsWith('/rm'))
     if (at >= 0) {
       // Recursive only: `rm -f file.log` is everyday work, a hold on it would get the feature switched off.
-      let recursive = false
-      let endOfFlags = false
-      const targets: string[] = []
-      for (const w of words.slice(at + 1)) {
-        if (!endOfFlags && w === '--') endOfFlags = true
-        else if (!endOfFlags && w.startsWith('--')) recursive ||= w === '--recursive'
-        else if (!endOfFlags && /^-[a-zA-Z]+$/.test(w)) recursive ||= /[rR]/.test(w)
-        else targets.push(w)
-      }
+      const { recursive, targets } = rmArgs(words.slice(at + 1))
       if (recursive && targets.length > 0) {
         add({ kind: 'rm', targets })
         continue
@@ -2119,8 +2155,6 @@ export function blastAll(command: string): BlastKind[] {
   }
   return found
 }
-
-export const blastOf = (command: string): BlastKind | undefined => blastAll(command)[0]
 
 const BLAST_WAIT_MS = 10 * 60 * 1000
 const BLAST_ROWS = 8
@@ -2602,6 +2636,7 @@ export const register: Register = on => {
         return { text: rulesText(await read($, rules)) }
       case 'unrule': {
         const at = Number.parseInt(args.slice(word.length), 10) - 1
+        if (!(at >= 0)) return { text: 'Cách dùng: /mods unrule <số thứ tự>' }
         return { text: rulesText(await setRules($, list => list.filter((_, i) => i !== at))) }
       }
       case 'timer':
@@ -3132,7 +3167,7 @@ export const register: Register = on => {
       ['prompts', 'Prompt', 'p', () => void openPrompts($)],
       ['settings', 'Cài đặt', 'c', () => void openSettings($)],
       ['sel', 'Chọn', 'v', () => void grabSelection($)],
-      ['hide', 'Ẩn', 'h', () => setSetting($, 'band', false)],
+      ['hide', 'Ẩn', 'h', () => void setSetting($, 'band', false)],
     ]
     const buttons = (
       <Box flexDirection="row" flexWrap="wrap">
@@ -3594,9 +3629,7 @@ export const register: Register = on => {
     // Everything in one group or the catch-all "Khác": a new setting never goes missing.
     const placed = new Set(Object.values(SETTING_GROUPS).flat())
     const groups: [string, (keyof Settings)[]][] = [
-      ...Object.entries(SETTING_GROUPS).map(
-        ([title, list]) => [title, list.filter(k => k in SETTING_INFO)] as [string, (keyof Settings)[]],
-      ),
+      ...Object.entries(SETTING_GROUPS),
       ['Khác', keys.filter(k => !placed.has(k))],
     ]
 
@@ -4082,19 +4115,21 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage', props: { origin: { kind: 'composer' } } }, async ($, e, next) => {
     const [[P, s], pics] = await Promise.all([look($), picsFor($, e.requestId, e.props.text)])
-    if (!s.cards && !pics.length) return next(e)
+    if (!s.cards && !s.frame && !pics.length) return next(e)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const Image = 'Image' in t ? t.Image : undefined
 
+    // Frame: a rounded box around the whole message, no edge glyphs inside it.
     // Card: a rounded bracket down the left (╭ │ ╰, one line ╰), ❯ on the first line.
+    const bracket = s.cards && !s.frame
     const lines = e.props.text.split('\n')
     const edge = (i: number) => (i === lines.length - 1 ? '╰ ' : i === 0 ? '╭ ' : '│ ')
     const row = (
       <Box flexDirection="column">
         {lines.map((line, i) => (
           <Box flexDirection="row">
-            {s.cards ? <Text color={P.accent}>{edge(i)}</Text> : null}
+            {bracket ? <Text color={P.accent}>{edge(i)}</Text> : null}
             <Text color={P.accent} bold>
               {i === 0 ? '❯ ' : '  '}
             </Text>
@@ -4104,7 +4139,7 @@ export const register: Register = on => {
       </Box>
     )
     const thumbs = pics.length > 0 && (
-      <Box flexDirection="row" flexWrap="wrap" gap={2} marginTop={1} marginLeft={s.cards ? 4 : 2}>
+      <Box flexDirection="row" flexWrap="wrap" gap={2} marginTop={1} marginLeft={bracket ? 4 : 2}>
         {pics.map((pic, i) => (
           <Box flexDirection="column">
             {s.images && Image && pic.mediaType === 'image/png' && pic.data.length <= IMAGE_MAX_BASE64 ? (
@@ -4123,7 +4158,10 @@ export const register: Register = on => {
     )
 
     return (
-      <Box flexDirection="column">
+      <Box
+        flexDirection="column"
+        {...(s.frame ? { borderStyle: 'round', borderColor: P.accent, paddingX: 1 } : {})}
+      >
         {row}
         {thumbs}
       </Box>
@@ -4137,9 +4175,9 @@ export const register: Register = on => {
       ...e,
       props: {
         ...e.props,
-        ...(s.decor ? { word: SPINNER_WORDS[e.props.mode] } : {}),
+        ...(s.decor ? { word: SPINNER_WORDS[e.props.mode] ?? e.props.word } : {}),
         // One joke per turn, picked when the turn starts.
-        ...(s.fun ? { suffix: `${e.props.suffix} · ${JOKES[jokeAt % JOKES.length]}` } : {}),
+        ...(s.fun ? { suffix: `${e.props.suffix ?? ''} · ${JOKES[jokeAt % JOKES.length]}` } : {}),
       },
     })
   })

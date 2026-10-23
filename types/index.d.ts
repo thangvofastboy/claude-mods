@@ -1,6 +1,7 @@
 export type Settings = {
   band: boolean
   cards: boolean
+  frame: boolean
   tldr: boolean
   notify: boolean
   sound: boolean
@@ -29,9 +30,11 @@ export type Settings = {
   anim: boolean
   confetti: boolean
   splash: boolean
+  splashhide: boolean
   heatmap: boolean
   hovercards: boolean
   images: boolean
+  autoupdate: boolean
   secrets: boolean
   budget: boolean
   checkpoints: boolean

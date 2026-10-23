@@ -239,22 +239,39 @@ test('compact draws the band on one status row', async ($, on) => {
   expect(await gaugeOnStatusRow()).toBe(true)
 })
 
-// A prompt card is a rounded bracket: ╭ on the first line, │ between, ╰ on the last; one line is ╰.
-test('a prompt card draws a rounded bracket down its left', async ($, on) => {
+// With frame off, a prompt card is a rounded bracket: ╭ on the first line, │ between, ╰ on the last; one line is ╰.
+test('frame off draws a rounded bracket down the left', async ($, on) => {
   mock.store(on)
-  const card = (text: string) =>
-    $.ui.mount({
+  const mods = (args: string) =>
+    $.command.run({ command: 'mods', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  expect((await mods('frame')).text).toContain('TẮT')
+  const edges = async (text: string) => {
+    const ui = await $.ui.mount({
       plugin: 'terminal-polish',
       surface: 'terminal',
       component: 'UserMessage',
       props: { text, origin: { kind: 'composer' }, isExpanded: false },
     })
-  const edges = async (text: string) => {
-    const ui = await card(text)
     const found = (await ui.findAll({ type: 'Text', text: /^[╭│╰] $/ })).map(t => t.text)
+    expect((await ui.findAll({ type: 'Box' })).some(b => b.props.borderStyle === 'round')).toBe(false)
     await ui.unmount()
     return found
   }
   expect(await edges('một\nhai\nba')).toEqual(['╭ ', '│ ', '╰ '])
   expect(await edges('một dòng')).toEqual(['╰ '])
+})
+
+// The frame setting boxes the whole prompt in a rounded border and drops the bracket glyphs inside it.
+test('a prompt in a frame has no bracket glyphs and keeps its text', async ($, on) => {
+  mock.store(on)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'UserMessage',
+    props: { text: 'một\nhai', origin: { kind: 'composer' }, isExpanded: false },
+  })
+  expect(await ui.findAll({ type: 'Text', text: /^[╭│╰] $/ })).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /một/ })).toBeDefined()
+  expect((await ui.findAll({ type: 'Box' })).some(b => b.props.borderStyle === 'round')).toBe(true)
+  await ui.unmount()
 })

@@ -1,6 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface } from 'claude-code'
-import { answerBlast, blastAll, blastOf, heldVerdict, holdBlast } from '../hooks/register'
+import { answerBlast, blastAll, heldVerdict, holdBlast } from '../hooks/register'
+
+const blastOf = (command: string) => blastAll(command)[0]
 
 const R = 'r' + 'm'
 const PUSH = 'git ' + 'push'
