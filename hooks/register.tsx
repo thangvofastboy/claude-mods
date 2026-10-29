@@ -96,6 +96,12 @@ const DEFAULTS: Settings = {
   todos: true,
   notices: true,
   autoupdate: true,
+  msgactions: true,
+  asknotify: true,
+  quiet: false,
+  quotaalert: true,
+  testfail: true,
+  relatedtest: false,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -105,7 +111,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   notify: 'báo khi lượt dài xong (thẻ trên dải trạng thái và thông báo hệ điều hành)',
   sound: 'âm thanh khi lượt dài xong',
   voice: 'đọc to khi lượt dài xong',
-  guard: 'chặn lệnh nguy hiểm và việc sửa file bí mật',
+  guard: 'lệnh nguy hiểm và sửa/ghi file bí mật: hỏi bạn trong hộp thoại quyền trước khi chạy, không có ai để hỏi thì chặn',
   decor: 'spinner, dòng gợi ý và dòng thời gian kiểu mới',
   quota: 'thanh quota 5h/7d trên dải trạng thái',
   autocompact: `tự /compact khi context từ ${COMPACT_PERCENT}% (tắt: chỉ nhắc nếu bật ctxwarn)`,
@@ -113,7 +119,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   abbrev: 'bung từ viết tắt ;xxx trong prompt',
   rules: 'thêm luật của dự án vào system prompt',
   tools: 'tool notify_me và subagent reviewer/tester cho Claude (áp dụng khi nạp lại)',
-  automodel: 'tự dùng Haiku cho câu hỏi đơn giản (thử nghiệm)',
+  automodel: 'tự chọn model và effort cho từng lượt và từng subagent: Haiku/low cho việc nhẹ, Sonnet/medium cho code, Opus/high cho review, thiết kế, debug (thử nghiệm)',
   journal: 'ghi nhật ký khi đóng session vào ~/.claude/mods-journal.md',
   collapse: 'thu gọn output Bash dài còn 3 dòng',
   badges: 'badge màu cho từng dòng tool',
@@ -143,6 +149,12 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
   autoupdate: 'tự cập nhật plugin lên tag mới nhất khi mở Claude (kiểm tra tối đa 6 giờ một lần, chỉ bản cài từ marketplace)',
+  msgactions: 'nút Sao chép và Huỷ (lượt đang chạy) dưới tin nhắn bạn đã gửi',
+  asknotify: 'báo khi Claude hỏi bạn (AskUserQuestion), để bạn làm việc khác',
+  quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
+  quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
+  testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
+  relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 // The settings tab's groups; anything not listed falls into "Khác".
@@ -171,7 +183,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   ],
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
   'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock'],
-  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'relatedtest'],
   'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
@@ -182,6 +194,7 @@ const settings = atom({ plugin: 'terminal-polish', key: 'settings' } as const, D
 const project = atom({ plugin: 'terminal-polish', key: 'project' } as const, '')
 const git = atom({ plugin: 'terminal-polish', key: 'git' } as const, null)
 const turn = atom({ plugin: 'terminal-polish', key: 'turn' } as const, null)
+const liveTurn = atom({ plugin: 'terminal-polish', key: 'liveTurn' } as const, null)
 const last = atom({ plugin: 'terminal-polish', key: 'last' } as const, null)
 const history = atom({ plugin: 'terminal-polish', key: 'history' } as const, [])
 const usage = atom({ plugin: 'terminal-polish', key: 'usage' } as const, null)
@@ -204,6 +217,7 @@ const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
+const autoEffort = atom({ plugin: 'terminal-polish', key: 'autoEffort' } as const, null)
 const notices = atom({ plugin: 'terminal-polish', key: 'notices' } as const, [])
 const openCalls = atom({ plugin: 'terminal-polish', key: 'openCalls' } as const, [])
 const theme = atom({ plugin: 'terminal-polish', key: 'theme' } as const, 'auto')
@@ -222,8 +236,20 @@ const budgetWarned = atom({ plugin: 'terminal-polish', key: 'budgetWarned' } as 
 const spentToday = atom({ plugin: 'terminal-polish', key: 'spentToday' } as const, 0)
 const budgetLimit = atom({ plugin: 'terminal-polish', key: 'budgetLimit' } as const, 0)
 const blast = atom({ plugin: 'terminal-polish', key: 'blast' } as const, null)
+const testFail = atom({ plugin: 'terminal-polish', key: 'testFail' } as const, null as string | null)
+const lastAnswer = atom({ plugin: 'terminal-polish', key: 'lastAnswer' } as const, '')
+const quotaWarned = atom({ plugin: 'terminal-polish', key: 'quotaWarned' } as const, '')
 
 const ICON = { run: '◌', ok: '✓', fail: '✗' } as const
+const AGENT_STATUS: Record<string, string> = {
+  pending: 'chờ',
+  running: 'đang chạy',
+  waiting: 'đang đợi',
+  idle: 'rảnh',
+  completed: 'xong',
+  failed: 'lỗi',
+  killed: 'đã dừng',
+}
 const STATE_ROLE = { run: 'warn', ok: 'ok', fail: 'err' } as const
 const BARS = '▁▂▃▄▅▆▇█'
 const SPINNER_WORDS = {
@@ -507,7 +533,11 @@ async function fetchUsage($: EngineInterface) {
   const value: Usage = {
     percent: u.context.percent ?? null,
     usd: u.cost?.usd ?? null,
-    limits: u.rateLimits.map(l => ({ kind: l.kind, percent: Math.round(l.percentUsed) })),
+    limits: u.rateLimits.map(l => ({
+      kind: l.kind,
+      percent: Math.round(l.percentUsed),
+      ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
+    })),
     tokens,
     // Unchanged tokens keep the last turn's figure; a drop (/compact, /clear) clears it.
     added:
@@ -556,19 +586,154 @@ const syncPeers = async ($: EngineInterface) => {
   if (dir) await refreshPeers($, `${dir}/.claude/sessions`, await $.session.id())
 }
 
+// True while an agent of this session may be running: set by a spawn, cleared by
+// a list with none running.
+let agentsLive = false
+
 async function refreshAgents($: EngineInterface) {
   try {
     const found: Agent[] = (await $.agent.list())
-      .slice(-10)
-      .map(a => ({ id: a.id, label: a.name ?? a.description ?? a.type, status: a.status }))
+      .slice(-50)
+      .map(a => ({
+        id: a.id,
+        label: a.description || a.name || a.type,
+        status: a.status,
+        type: a.type,
+        ...(a.parentId ? { parentId: a.parentId } : {}),
+      }))
+    agentsLive = agentSummary(found).running > 0
     if (!same(await read($, agents), found)) await update($, agents, () => found)
   } catch {
     // No agents noun answer: leave the last list.
   }
 }
 
+// Counts over every agent the session has run, not only the rows drawn.
+export function agentSummary(list: { status: string }[]) {
+  const count = (...words: string[]) => list.filter(a => words.includes(a.status)).length
+  return {
+    running: count('running', 'pending', 'waiting'),
+    done: count('completed'),
+    failed: count('failed', 'killed'),
+    total: list.length,
+  }
+}
+
+// Quota: 90% is the warning line; the window's key (kind and reset) keeps one alert per window.
+const QUOTA_ALERT_PERCENT = 90
+const PIN_MAX = 500
+
+export const inQuiet = (hour: number) => hour >= 22 || hour < 8
+
+export function formatReset(iso: string | undefined, now: number) {
+  const at = iso ? Date.parse(iso) : Number.NaN
+  if (Number.isNaN(at)) return 'chưa rõ'
+  const min = Math.round((at - now) / 60000)
+  if (min <= 0) return 'sắp reset'
+  return min >= 60 ? `${Math.floor(min / 60)}h${min % 60}m` : `${min}m`
+}
+
+export function quotaAlert(limits: Limit[], warned: string, now: number) {
+  const over = limits.filter(l => l.percent >= QUOTA_ALERT_PERCENT)
+  const keys = over.map(l => `${l.kind}|${l.resetsAt ?? ''}`)
+  const seen = warned.split('\n')
+  const fresh = over.filter((_, i) => !seen.includes(keys[i] ?? ''))
+  if (fresh.length === 0) return null
+  return {
+    keys: keys.join('\n'),
+    text: fresh
+      .map(l => `${LIMIT_LABEL[l.kind] ?? l.kind} đã dùng ${l.percent}% · reset sau ${formatReset(l.resetsAt, now)}`)
+      .join(' · '),
+  }
+}
+
+// The first failing test name in a runner's output; null when none is recognised.
+export function failName(text: string): string | null {
+  const patterns = [/FAIL\s+\S+\s+>\s+(.+)/, /^\s*●\s+(.+)$/m, /^FAILED\s+(\S+)/m, /--- FAIL: (\S+)/]
+  for (const re of patterns) {
+    const m = re.exec(text)
+    if (m?.[1]) return m[1].trim().slice(0, 80)
+  }
+  return null
+}
+
+// `--no-install`: a runner missing from node_modules is not fetched from the network.
+export function relatedCommand(pkg: string, files: string[]): string[] | null {
+  if (files.length === 0) return null
+  if (/"vitest"/.test(pkg)) return ['npx', '--no-install', 'vitest', 'related', '--run', ...files]
+  if (/"jest"/.test(pkg)) return ['npx', '--no-install', 'jest', '--findRelatedTests', ...files]
+  return null
+}
+
+export function searchPrompts(texts: string[], query: string, limit = 10) {
+  const q = query.toLowerCase()
+  const hits = texts.map(t => t.trim()).filter(t => t && t.toLowerCase().includes(q))
+  return [...new Set(hits)].reverse().slice(0, limit)
+}
+
+// User prompts from one Claude Code transcript (JSON lines); tool results carry no text block.
+export function transcriptPrompts(lines: string[]) {
+  const out: string[] = []
+  for (const line of lines) {
+    if (!line.includes('"type":"user"')) continue
+    try {
+      const row = JSON.parse(line) as { type?: string; message?: { content?: unknown } }
+      if (row.type !== 'user') continue
+      const c = row.message?.content
+      if (typeof c === 'string') out.push(c)
+      else if (Array.isArray(c))
+        for (const b of c) if (b && typeof b === 'object' && (b as { type?: unknown }).type === 'text')
+          out.push(String((b as { text?: unknown }).text ?? ''))
+    } catch {
+      // A partial line at the end of a file being written.
+    }
+  }
+  return out
+}
+
+export function spendSince(stats: Record<string, Record<string, { usd: number }>>, days: string[]) {
+  return days.reduce((n, day) => n + Object.values(stats[day] ?? {}).reduce((m, r) => m + r.usd, 0), 0)
+}
+
+export function prDraft(log: string, stat: string) {
+  const commits = log.split('\n').filter(Boolean).map(l => `- ${l}`)
+  return [
+    '## Tóm tắt',
+    ...(commits.length ? commits : ['- Chưa có commit mới so với nhánh gốc.']),
+    '',
+    '## Thay đổi',
+    '```',
+    stat.trim() || '(không có thay đổi file)',
+    '```',
+  ].join('\n')
+}
+
+export const pinText = (answer: string) => {
+  const t = answer.trim()
+  return t.length > PIN_MAX ? `${t.slice(0, PIN_MAX)}…` : t
+}
+
+// Output of a finished Bash call, as the tool returned it.
+export function outputOf(result: unknown) {
+  if (typeof result === 'string') return result
+  if (result && typeof result === 'object') {
+    const r = result as { stdout?: unknown; stderr?: unknown }
+    return `${String(r.stdout ?? '')}\n${String(r.stderr ?? '')}`
+  }
+  return ''
+}
+
+// The band's failing-test name as last written, so a passing run does not rewrite null.
+let lastFail: string | null = null
+
+async function copyText($: EngineInterface, text: string) {
+  const copied = await $.ui.copy({ text }).catch(() => undefined)
+  void notice($, copied?.isCopied ? '✅ Đã sao chép' : '❌ Không sao chép được')
+}
+
 // The sessions list and the subagent rows are only drawn in their panes: poll
-// while one is in front, not all session long.
+// while one is in front, not all session long. The band's agent count polls
+// while an agent runs.
 let polling = false
 export async function pollPanes($: EngineInterface) {
   if (polling) return
@@ -577,7 +742,7 @@ export async function pollPanes($: EngineInterface) {
     const shown = new Set((await $.ui.panes()).filter(p => p.isShown).map(p => p.id))
     await Promise.all([
       shown.has(PEERS_PANE) ? syncPeers($) : undefined,
-      shown.has(DASH) ? refreshAgents($) : undefined,
+      shown.has(DASH) || agentsLive ? refreshAgents($) : undefined,
     ])
   } catch {
     // A missed round; the next tick tries again.
@@ -1623,6 +1788,74 @@ async function saveProjectValue($: EngineInterface, key: string, value: unknown)
   await $.store.set(key, all)
 }
 
+// Related tests after an edit: the runner is read from package.json; no runner, no run.
+// One run at a time: files edited while it runs join the next run.
+const relatedWaiting = new Set<string>()
+let relatedRunning = false
+async function relatedTests($: EngineInterface, file: string) {
+  relatedWaiting.add(file)
+  if (relatedRunning) return
+  relatedRunning = true
+  try {
+    while (relatedWaiting.size > 0) {
+      const batch = [...relatedWaiting]
+      relatedWaiting.clear()
+      const dir = await read($, root)
+      const argv = relatedCommand(await $.fs.read(`${dir}/package.json`).catch(() => ''), batch)
+      if (!argv) return
+      const run = await $.process.run(argv, { cwd: dir, timeoutMs: 60000 }).catch(() => undefined)
+      const names = batch.map(baseName).join(', ')
+      void notice($, run?.exitCode === 0 ? `✅ Test liên quan ${names} qua` : `❌ Test liên quan ${names} lỗi`)
+    }
+  } finally {
+    relatedRunning = false
+    relatedWaiting.clear()
+  }
+}
+
+async function historyCommand($: EngineInterface, query: string) {
+  if (!query) return 'Dùng: /mods history <từ khoá>'
+  const own = (await $.session.messages()).filter(m => m.role === 'user').map(m => m.text)
+  const dir = `${await read($, home)}/.claude/projects/${(await read($, root)).replace(/[^A-Za-z0-9]/g, '-')}`
+  const saved: string[] = []
+  try {
+    // ponytail: first 8 transcripts in listing order, not newest; sort by mtime if the list gives it.
+    const files = (await $.fs.list(dir)).filter(f => f.name.endsWith('.jsonl')).slice(0, 8)
+    for (const f of files) saved.push(...transcriptPrompts((await $.fs.read(`${dir}/${f.name}`)).split('\n')))
+  } catch {
+    // No transcripts for this project yet.
+  }
+  const hits = searchPrompts([...own, ...saved], query)
+  return hits.length ? hits.map(h => `• ${h.slice(0, 160).replace(/\s+/g, ' ')}`).join('\n') : `Không có prompt nào khớp "${query}".`
+}
+
+async function prCommand($: EngineInterface) {
+  const dir = await read($, root)
+  if (!(await gitIsSafe($, dir))) return 'Bỏ qua: .git/config của repo này khai báo chương trình git sẽ chạy.'
+  const hasMain = await $.process.run([...SAFE_GIT, '-C', dir, 'rev-parse', '--verify', '--quiet', 'main'], { timeoutMs: 3000 })
+  const base = hasMain.exitCode === 0 ? 'main' : 'master'
+  const [log, stat] = await Promise.all([
+    $.process.run([...SAFE_GIT, '-C', dir, 'log', '--format=%s', `${base}..HEAD`], { timeoutMs: 5000 }),
+    $.process.run([...SAFE_GIT, '-C', dir, 'diff', '--stat', `${base}...HEAD`], { timeoutMs: 5000 }),
+  ])
+  if (log.exitCode !== 0) return `Không so được với ${base} (nhánh chưa có?).`
+  return prDraft(log.stdout, stat.stdout)
+}
+
+async function pinCommand($: EngineInterface) {
+  const answer = await read($, lastAnswer)
+  if (!answer) return 'Chưa có câu trả lời nào để ghim.'
+  await setNotes($, l => [...l, pinText(answer)])
+  return 'Đã ghim câu trả lời gần nhất vào ghi chú.'
+}
+
+async function quotaCommand($: EngineInterface) {
+  const limits = (await read($, usage))?.limits ?? []
+  if (limits.length === 0) return 'Chưa có số liệu giới hạn (chỉ có khi dùng gói đăng ký).'
+  const now = await $.clock.now()
+  return limits.map(l => `${LIMIT_LABEL[l.kind] ?? l.kind}: ${l.percent}% · reset sau ${formatReset(l.resetsAt, now)}`).join('\n')
+}
+
 // ---- budget (38): today's spend from the stats, a daily limit in $.store
 async function refreshSpend($: EngineInterface, loaded?: Stats) {
   const stats = loaded ?? (await loadStats($))
@@ -1633,7 +1866,29 @@ async function refreshSpend($: EngineInterface, loaded?: Stats) {
   if (!same(await read($, budgetLimit), limit)) await update($, budgetLimit, () => limit)
 }
 
+const last7Days = (now: number) => Array.from({ length: 7 }, (_, i) => localDay(now - i * 86400000))
+
+async function weekSpent($: EngineInterface) {
+  return spendSince(await loadStats($), last7Days(await $.clock.now()))
+}
+
+async function weekBudgetCommand($: EngineInterface, rest: string) {
+  if (rest === 'off' || rest === '0') {
+    await $.store.set('budgetweek', 0)
+    return 'Đã bỏ giới hạn chi tiêu 7 ngày.'
+  }
+  const amount = Number.parseFloat(rest.replace('$', ''))
+  if (rest && amount > 0) {
+    await $.store.set('budgetweek', amount)
+    return `Giới hạn 7 ngày: $${amount.toFixed(2)}. 7 ngày qua đã dùng $${(await weekSpent($)).toFixed(2)}.`
+  }
+  const raw = await $.store.get('budgetweek')
+  const limit = typeof raw === 'number' && raw > 0 ? raw : 0
+  return `7 ngày qua: $${(await weekSpent($)).toFixed(2)}${limit ? ` / $${limit.toFixed(2)}` : ' (chưa đặt giới hạn)'}. Đặt: /mods budget week 30 · bỏ: /mods budget week off`
+}
+
 async function budgetCommand($: EngineInterface, rest: string) {
+  if (rest.startsWith('week')) return weekBudgetCommand($, rest.slice(4).trim())
   if (rest === 'off' || rest === '0') {
     await $.store.set('budget', 0)
     await refreshSpend($)
@@ -2331,6 +2586,40 @@ async function shellReason($: EngineInterface, command: string) {
 // prefix or suffix is kept), and the step is left alone when that cannot be done.
 // ponytail: assumes Haiku shares the session model's version; a release where
 // they differ needs a lookup table here.
+export type Effort = 'low' | 'medium' | 'high'
+
+// Auto model for a subagent: a light model for looking things up, the strongest
+// for judgment work, the middle one for the rest. The type decides first.
+export function agentPlan(type: string, description: string): { model: 'haiku' | 'sonnet' | 'opus'; effort: Effort } {
+  const light = { model: 'haiku', effort: 'low' } as const
+  const deep = { model: 'opus', effort: 'high' } as const
+  if (/^(Explore|statusline-setup|claude-code-guide)$/.test(type)) return light
+  if (/plan|architect|review|security|debug|audit/i.test(type)) return deep
+  const d = description.toLowerCase()
+  if (/\b(review|design|architecture|debug|audit)\b/.test(d) || /thiết kế|kiến trúc|gỡ lỗi/.test(d)) return deep
+  if (/\b(search|find|grep|list|look up|locate|explore)\b/.test(d) || /tìm|liệt kê/.test(d)) return light
+  return { model: 'sonnet', effort: 'medium' }
+}
+
+const AUTO_MODEL_RULES = [
+  'Model routing (the user turned on auto model). When you call the Agent tool, set its `model` to fit the task:',
+  '- `haiku` for searching, reading and listing files;',
+  '- `sonnet` for writing or editing code, tests and docs;',
+  '- `opus` for architecture, design, code review and hard debugging.',
+  'A `model` you set is kept; one you leave out is picked by these rules.',
+].join('\n')
+
+// The effort each running subagent asked for, by its agent id; read on every step.
+// ponytail: a plain map capped at 200 entries, oldest dropped; no cleanup on agent end.
+const agentEfforts = new Map<string, Effort>()
+function rememberEffort(agentId: string, effort: Effort) {
+  agentEfforts.set(agentId, effort)
+  if (agentEfforts.size > 200) {
+    const oldest = agentEfforts.keys().next().value
+    if (oldest !== undefined) agentEfforts.delete(oldest)
+  }
+}
+
 function haikuIdFor(model: string) {
   const base = model.replace(/\[1m\]$/, '')
   if (/haiku/.test(base)) return undefined
@@ -2414,6 +2703,11 @@ async function helpText($: EngineInterface) {
     '  find <x>  tìm x trong hội thoại này',
     'Công cụ:',
     '  budget <$>|off     giới hạn chi tiêu theo ngày',
+    '  budget week <$>|off  giới hạn chi tiêu 7 ngày',
+    '  history <x>        tìm x trong prompt của mọi session trong dự án này',
+    '  pr                 soạn mô tả PR từ commit và file so với main',
+    '  pin                ghim câu trả lời gần nhất vào ghi chú',
+    '  quota              mức dùng 5h/7d và giờ reset',
     '  undo [file] · checkpoints   hoàn tác lần sửa file gần nhất của Claude',
     '  check "<lệnh>"|run|off      lệnh kiểm tra của dự án',
     '  commit             Haiku soạn commit message từ phần đã stage',
@@ -2447,7 +2741,7 @@ export const register: Register = on => {
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update',
+          'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
       })
     } catch {
       void notice($, 'terminal-polish: không đăng ký được /mods')
@@ -2550,6 +2844,8 @@ export const register: Register = on => {
     'checkpoints',
     'rules',
     'vui',
+    'history',
+    'quota',
   ])
 
   on('command.run', { command: 'mods' }, async ($, e) => {
@@ -2569,6 +2865,14 @@ export const register: Register = on => {
         return placed(await openSettings($), 'Đã mở tab cài đặt.')
       case 'budget':
         return { text: await budgetCommand($, args.slice(word.length).trim()) }
+      case 'history':
+        return { text: await historyCommand($, args.slice(word.length).trim()) }
+      case 'pr':
+        return { text: await prCommand($) }
+      case 'pin':
+        return { text: await pinCommand($) }
+      case 'quota':
+        return { text: await quotaCommand($) }
       case 'undo':
         return { text: await undoCommand($, args.slice(word.length).trim()) }
       case 'checkpoints':
@@ -2665,11 +2969,13 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn must not reset the main turn's counters or model pick.
+    if (e.agentId) return next(e)
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
     const [, , effect, s] = await Promise.all([
-      update($, turn, () => value),
-      update($, autoModel, () => null),
+      Promise.all([update($, turn, () => value), update($, liveTurn, () => ({ id: e.turnId, text: e.text }))]),
+      Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       read($, fx),
       read($, settings),
     ])
@@ -2682,7 +2988,11 @@ export const register: Register = on => {
           ['simple: a quick question or a small, local edit', 'complex: multi-step work, debugging, design or review'],
           { model: 'haiku' },
         )
-        if (label?.startsWith('simple')) await update($, autoModel, () => 'haiku')
+        if (label?.startsWith('simple')) {
+          await Promise.all([update($, autoModel, () => 'haiku'), update($, autoEffort, () => 'low' as const)])
+        } else if (label?.startsWith('complex')) {
+          await update($, autoEffort, () => 'high' as const)
+        }
       } catch {
         // Keep the session's own model.
       }
@@ -2690,11 +3000,31 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Auto model (20): a turn classified simple runs its main-thread steps on Haiku.
+  // Auto model (20): a turn classified simple runs its main-thread steps on Haiku
+  // at low effort, a complex one at high effort; a subagent's steps take the effort
+  // its spawn picked. Effort is only set where the model takes one.
   on('turn.step', async function* ($, e, next) {
-    const pick = e.agentId ? null : await read($, autoModel)
+    if (e.agentId) {
+      const effort = agentEfforts.get(e.agentId)
+      return yield* next(effort && e.effort !== undefined ? { ...e, effort } : e)
+    }
+    const [pick, effort] = await Promise.all([read($, autoModel), read($, autoEffort)])
     const model = pick === 'haiku' ? haikuIdFor(e.model) : undefined
-    return yield* next(model ? { ...e, model } : e)
+    if (model) return yield* next({ ...e, model })
+    return yield* next(effort && e.effort !== undefined ? { ...e, effort } : e)
+  })
+
+  // Auto model for subagents: a model Claude left out is picked by the task; a
+  // fork or teammate keeps its parent's, a resumed run keeps its own.
+  on('agent.spawn', async ($, e, next) => {
+    agentsLive = true
+    if (e.fork || e.isTeammate || e.resume || !(await read($, settings)).automodel) return next(e)
+    // A model Claude chose keeps its own effort: the plan's would not fit it.
+    if (e.model !== undefined) return next(e)
+    const plan = agentPlan(e.subagentType, e.description)
+    const ran = await next({ ...e, model: plan.model })
+    if ('agentId' in ran && typeof ran.agentId === 'string') rememberEffort(ran.agentId, plan.effort)
+    return ran
   })
 
   // Abbreviations (15): expand `;key` before the prompt is sent.
@@ -2719,14 +3049,24 @@ export const register: Register = on => {
     // so a limit hit yesterday does not hold this morning's prompts.
     // The limit is read from the store (another session may have set it); the
     // stats only when there is one.
-    const budget = !isForced && s.budget && kind !== 'task-notification' ? await $.store.get('budget') : 0
-    if (typeof budget === 'number' && budget > 0) {
-      await refreshSpend($)
+    const gated = !isForced && s.budget && kind !== 'task-notification'
+    const [budget, weekLimit] = gated ? await Promise.all([$.store.get('budget'), $.store.get('budgetweek')]) : [0, 0]
+    const dayOn = typeof budget === 'number' && budget > 0
+    const weekOn = typeof weekLimit === 'number' && weekLimit > 0
+    const stats = dayOn || weekOn ? await loadStats($) : undefined
+    if (dayOn) {
+      await refreshSpend($, stats)
       const [limit, spent] = await Promise.all([read($, budgetLimit), read($, spentToday)])
       if (limit > 0 && spent >= limit) {
         return {
           drop: `💰 Đã dùng $${spent.toFixed(2)} / $${limit.toFixed(2)} hôm nay. Gửi lại với "${BYPASS}" ở đầu để vẫn gửi, hoặc /mods budget off.`,
         }
+      }
+    }
+    if (weekOn && stats && typeof weekLimit === 'number') {
+      const week = spendSince(stats, last7Days(await $.clock.now()))
+      if (week >= weekLimit) {
+        return { drop: `💰 7 ngày qua đã dùng $${week.toFixed(2)} / $${weekLimit.toFixed(2)}. Gửi lại với "${BYPASS}" ở đầu để vẫn gửi, hoặc /mods budget week off.` }
       }
     }
     if (s.abbrev && kind === 'composer' && text.includes(';')) text = expandAbbrevs(text, await loadAbbrevs($))
@@ -2750,20 +3090,21 @@ export const register: Register = on => {
   // Project rules (17): appended to the system prompt, last.
   on('prompt.compose', async ($, e, next) => {
     const [ran, list, s] = await Promise.all([next(e), read($, rules), read($, settings)])
-    if (!s.rules || list.length === 0) return ran
-    return {
-      ...ran,
-      sections: [
-        ...ran.sections,
-        {
-          id: 'terminal-polish-rules',
-          scope: 'session' as const,
-          text: ['Project rules the user set for this repository (follow them):', ...list.map(r => `- ${r}`)].join(
-            '\n',
-          ),
-        },
-      ],
-    }
+    const extra = [
+      ...(s.rules && list.length > 0
+        ? [
+            {
+              id: 'terminal-polish-rules',
+              scope: 'session' as const,
+              text: ['Project rules the user set for this repository (follow them):', ...list.map(r => `- ${r}`)].join(
+                '\n',
+              ),
+            },
+          ]
+        : []),
+      ...(s.automodel ? [{ id: 'terminal-polish-automodel', scope: 'session' as const, text: AUTO_MODEL_RULES }] : []),
+    ]
+    return extra.length > 0 ? { ...ran, sections: [...ran.sections, ...extra] } : ran
   })
 
   // notify_me (18): a tool the model calls to reach the user.
@@ -2804,46 +3145,69 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Guard: fails closed, a fault here denies rather than waves through.
-  const guard = (reason: string) => ({
-    deny: `terminal-polish đã chặn: ${reason}. Hỏi người dùng; họ có thể tự chạy lệnh hoặc tắt bằng /mods guard.`,
+  // Guard: a risky shell command or a secret file is put to the person. A
+  // tool.check ask with decider "person" lets only the permission dialog approve
+  // it; where nobody can be asked, it is refused with this reason. A fault denies.
+  const personAsk = (reason: string) => ({
+    decision: 'ask' as const,
+    reason: `terminal-polish cần bạn duyệt: ${reason}. Chỉ hộp thoại quyền mới cho chạy; không có ai để hỏi thì bị chặn.`,
+    // The SDK types in this repo predate CLI 2.1.304, which added 'person'.
+    decider: 'person' as unknown as 'host',
   })
+  const checkFailed = { decision: 'deny' as const, reason: 'terminal-polish: bộ chặn lỗi, đã chặn cho an toàn.' }
   const guardFailed = { deny: 'terminal-polish: bộ chặn lỗi, đã chặn cho an toàn.' }
+  const textOf = (input: unknown, key: string) => {
+    const v = (input as Record<string, unknown> | null)?.[key]
+    return typeof v === 'string' ? v : ''
+  }
 
+  // A core deny stands: a hook only tightens it to an ask, never loosens it.
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.decision === 'deny') return ran
+    const reason = await shellReason($, textOf(e.input, 'command'))
+    if (!reason) return ran
+    if (e.tool_use_id) void notice($, `🛡 Cần duyệt: ${reason}`)
+    return personAsk(reason)
+  }).catch(() => checkFailed)
+
+  // Monitor runs a shell command too: the same rules, or it is a way around them.
+  on('tool.check', { tool: 'Monitor' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.decision === 'deny') return ran
+    const reason = await shellReason($, textOf(e.input, 'command'))
+    if (!reason) return ran
+    if (e.tool_use_id) void notice($, `🛡 Cần duyệt: ${reason}`)
+    return personAsk(reason)
+  }).catch(() => checkFailed)
+
+  on('tool.check', { tool: 'Edit' }, async ($, e, next) => {
+    const ran = await next(e)
+    const file = textOf(e.input, 'file_path')
+    if (ran.decision === 'deny' || !isSecretFile(file) || !(await read($, settings)).guard) return ran
+    if (e.tool_use_id) void notice($, `🛡 Cần duyệt sửa ${baseName(file)}`)
+    return personAsk(`sửa file bí mật ${baseName(file)}`)
+  }).catch(() => checkFailed)
+
+  on('tool.check', { tool: 'Write' }, async ($, e, next) => {
+    const ran = await next(e)
+    const file = textOf(e.input, 'file_path')
+    if (ran.decision === 'deny' || !isSecretFile(file) || !(await read($, settings)).guard) return ran
+    if (e.tool_use_id) void notice($, `🛡 Cần duyệt ghi ${baseName(file)}`)
+    return personAsk(`ghi file bí mật ${baseName(file)}`)
+  }).catch(() => checkFailed)
+
+  // The held-command card (blast) stays on the call itself: it waits for the person's answer.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const reason = await shellReason($, e.command)
-    if (reason) {
-      await notice($, `🛡 Đã chặn: ${reason}`)
-      return guard(reason)
-    }
     const held = await heldVerdict($, e.tool_use_id, e.command, next.signal, e.agentId)
     return held ?? next(e)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
-  // Monitor runs a shell command too: the same rules, or it is a way around them.
   on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
-    const raw = (e as unknown as { command?: unknown }).command
-    const command = typeof raw === 'string' ? raw : ''
-    const reason = await shellReason($, command)
-    if (reason) {
-      await notice($, `🛡 Đã chặn: ${reason}`)
-      return guard(reason)
-    }
+    const command = textOf(e, 'command')
     // The same hold as Bash, or Monitor is a way around it.
     const held = await heldVerdict($, e.tool_use_id, command, next.signal, e.agentId)
     return held ?? next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
-
-  on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    void notice($, `🛡 Đã chặn sửa ${baseName(e.file_path)}`)
-    return guard(`sửa file bí mật ${baseName(e.file_path)}`)
-  }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
-
-  on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!(await read($, settings)).guard || !isSecretFile(e.file_path)) return next(e)
-    void notice($, `🛡 Đã chặn ghi ${baseName(e.file_path)}`)
-    return guard(`ghi file bí mật ${baseName(e.file_path)}`)
   }).catch(($, e, next) => (next.called ? next(e) : guardFailed))
 
   // Bookkeeping: fails open. Every step around `next` is caught, so a fault
@@ -2862,6 +3226,8 @@ export const register: Register = on => {
         read($, settings),
       ])
       began = now
+      if (e.tool === 'AskUserQuestion' && s.asknotify && !(s.quiet && inQuiet(new Date(now).getHours())))
+        void $.ui.notify('Claude đang chờ bạn trả lời').catch(() => undefined)
       if (path && e.tool !== 'Read' && s.checkpoints) pointId = await snapshot($, path)
     } catch {
       // The row is only display.
@@ -2887,12 +3253,20 @@ export const register: Register = on => {
         isEdit && path ? update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30)) : undefined,
         read($, settings),
       ])
+      if (e.tool === 'Bash' && ran.deny === undefined && TEST_COMMAND.test(e.command)) {
+        const name = isFailed ? (failName(outputOf(ran.result)) ?? 'test lỗi') : null
+        if (name !== lastFail) {
+          lastFail = name
+          await update($, testFail, () => name)
+        }
+      }
       if (s.confetti && !isFailed && e.tool === 'Bash' && TEST_COMMAND.test(e.command) && !/\|/.test(e.command)) {
         void notice($, '🎉 Test pass!')
         void startFx($, 'party')
       }
       if (isEdit && path) {
         if (s.format) await formatFile($, path)
+        if (s.relatedtest) void relatedTests($, path)
         if (s.todos) {
           const written = e.tool === 'Edit' ? e.new_string : e.tool === 'Write' ? e.content : ''
           await addTodos($, todosIn(written, path))
@@ -2934,9 +3308,10 @@ export const register: Register = on => {
       await Promise.all([
         update($, last, () => done),
         update($, history, list => [...list, done].slice(-20)),
-        update($, turn, () => null),
-        update($, autoModel, () => null),
+        Promise.all([update($, turn, () => null), update($, liveTurn, () => null)]),
+        Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       ])
+      if (e.reason === 'answer' && !e.isAborted) await update($, lastAnswer, () => e.answer)
       await endFx($, 'comet')
     } catch {
       // The rest (stats, git, TL;DR) still runs.
@@ -2952,11 +3327,19 @@ export const register: Register = on => {
     if (s.notify && done.seconds >= TOAST_SECONDS) void notice($, `✓ ${summary}`)
     if (done.seconds >= NOTIFY_SECONDS && !e.isAborted) {
       const title = (await read($, project)) || 'Claude'
-      if (s.notify) void $.ui.notify(summary, { title }).catch(() => undefined)
-      if (s.sound) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
-      if (s.voice) void $.audio.speak('Claude đã xong').catch(() => undefined)
+      const muted = s.quiet && inQuiet(new Date(await $.clock.now()).getHours())
+      if (s.notify && !muted) void $.ui.notify(summary, { title }).catch(() => undefined)
+      if (s.sound && !muted) void $.audio.play({ asset: 'sounds/done.wav' }).catch(() => undefined)
+      if (s.voice && !muted) void $.audio.speak('Claude đã xong').catch(() => undefined)
     }
     await Promise.all([refreshGit($), refreshUsage($, true)])
+    if (s.quotaalert) {
+      const alert = quotaAlert((await read($, usage))?.limits ?? [], await read($, quotaWarned), await $.clock.now())
+      if (alert) {
+        await update($, quotaWarned, () => alert.keys)
+        void notice($, `⚠ ${alert.text}`)
+      }
+    }
     try {
       const use = await read($, usage)
       const before = await read($, lastUsd)
@@ -3060,6 +3443,9 @@ export const register: Register = on => {
       checked,
       todoList,
       cards,
+      subs,
+      failing,
+      effortPick,
     ] = await Promise.all([
       read($, project),
       read($, git),
@@ -3076,6 +3462,9 @@ export const register: Register = on => {
       read($, check),
       read($, todos),
       s.notices ? read($, notices) : [],
+      read($, agents),
+      read($, testFail),
+      read($, autoEffort),
     ])
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
@@ -3124,7 +3513,10 @@ export const register: Register = on => {
     const openTodos = todoList.filter(x => !x.done).length
     if (s.todos && openTodos > 0) segments.push({ text: `☐ ${openTodos}`, color: P.violet })
     if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
-    if (working && pick) segments.push({ text: `⚡${pick}`, color: P.info })
+    if (working && (pick || effortPick)) segments.push({ text: `⚡${pick ?? effortPick}`, color: P.info })
+    if (s.testfail && failing) segments.push({ text: `✗ ${failing}`, color: P.err })
+    const crew = agentSummary(subs)
+    if (crew.running > 0) segments.push({ text: `🤖 ${crew.running} chạy · ${crew.done}/${crew.total} xong`, color: P.info })
 
     const label = (seg: Segment) =>
       seg.meter ? (s.meters ? `${seg.text} ` : `${seg.text} ${seg.meter.pct}%`) : seg.text
@@ -3319,7 +3711,13 @@ export const register: Register = on => {
       $.clock.now(),
     ])
     const slowest = Math.max(1, ...turns.map(x => x.seconds))
-    const room = Math.max(3, (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - subs.length)
+    const crew = agentSummary(subs)
+    const shownSubs = subs.slice(-10)
+    const busy = list.filter(c => c.state === 'run')
+    const room = Math.max(
+      3,
+      (e.viewport?.rows ?? 24) - 24 - Math.min(touched.length, 8) - shownSubs.length - Math.min(busy.length, 6),
+    )
     const HEAT = [P.muted, ...[0.15, 0.5, 0.8, 1].map(t => colorAt(P.grad, t))]
 
     const heading = (text: string) =>
@@ -3342,17 +3740,31 @@ export const register: Register = on => {
       <Box flexDirection="column" width={e.props.bodyColumns} gap={1}>
         {subs.length > 0 && (
           <Box flexDirection="column">
-            {heading(`Subagent (${subs.length})`)}
-            {subs.map(a => (
+            {heading(
+              `Agent · ${crew.running} đang chạy · ${crew.done} xong${crew.failed ? ` · ${crew.failed} lỗi` : ''} / ${crew.total}`,
+            )}
+            {shownSubs.map(a => (
               <Text
                 color={
                   a.status === 'running' ? P.warn : a.status === 'failed' || a.status === 'killed' ? P.err : P.muted
                 }
                 wrap="truncate-end"
               >
+                {a.parentId ? '  ↳ ' : ''}
                 {a.status === 'running' ? '● ' : a.status === 'completed' ? '✓ ' : '○ '}
-                {a.label} · {a.status}
+                {a.type} · {a.label} · {AGENT_STATUS[a.status] ?? a.status}
               </Text>
+            ))}
+            {subs.length > shownSubs.length ? (
+              <Text color={P.muted}>{`  … ${subs.length - shownSubs.length} agent cũ hơn`}</Text>
+            ) : null}
+          </Box>
+        )}
+        {busy.length > 0 && (
+          <Box flexDirection="column">
+            {heading(`Tiến trình đang chạy (${busy.length})`)}
+            {busy.slice(-6).map(c => (
+              <Text color={P.warn} wrap="truncate-end">{`◌ ${c.tool}${c.label ? ` · ${shortLabel(c.label)}` : ''}`}</Text>
             ))}
           </Box>
         )}
@@ -4113,9 +4525,12 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'UserMessage', props: { origin: { kind: 'composer' } } }, async ($, e, next) => {
+  // The person's prompts.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const from = e.props.origin
+    if (from.kind !== 'composer') return next(e)
     const [[P, s], pics] = await Promise.all([look($), picsFor($, e.requestId, e.props.text)])
-    if (!s.cards && !s.frame && !pics.length) return next(e)
+    if (!s.cards && !s.frame && !s.msgactions && !pics.length) return next(e)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const Image = 'Image' in t ? t.Image : undefined
@@ -4157,6 +4572,31 @@ export const register: Register = on => {
       </Box>
     )
 
+    // Cancel shows on the running turn's own prompt only.
+    // ponytail: matched by text, so an identical earlier prompt shows it too; key on a row id if one appears.
+    const live = s.msgactions ? await read($, liveTurn) : null
+    const liveId = live && live.text === e.props.text ? live.id : undefined
+    const actions = s.msgactions ? (
+      <Box flexDirection="row" gap={2} marginLeft={bracket ? 4 : 2}>
+        <Button
+          key={`copy-${e.requestId}`}
+          label="⧉ Sao chép"
+          plain
+          dimColor
+          onPress={() => void copyText($, e.props.text)}
+        />
+        {liveId ? (
+          <Button
+            key={`abort-${e.requestId}`}
+            label="■ Huỷ"
+            plain
+            dimColor
+            onPress={() => void $.turn.abort({ turnId: liveId }).catch(() => undefined)}
+          />
+        ) : null}
+      </Box>
+    ) : null
+
     return (
       <Box
         flexDirection="column"
@@ -4164,6 +4604,7 @@ export const register: Register = on => {
       >
         {row}
         {thumbs}
+        {actions}
       </Box>
     )
   })

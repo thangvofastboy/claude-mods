@@ -44,11 +44,17 @@ export type Settings = {
   compactplus: boolean
   todos: boolean
   notices: boolean
+  msgactions: boolean
+  asknotify: boolean
+  quiet: boolean
+  quotaalert: boolean
+  testfail: boolean
+  relatedtest: boolean
 }
 export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number; edits: number }
 export type LastTurn = { seconds: number; tools: number; failed: number }
-export type Limit = { kind: string; percent: number }
+export type Limit = { kind: string; percent: number; resetsAt?: string }
 export type Usage = {
   percent: number | null
   usd: number | null
@@ -61,7 +67,7 @@ export type Totals = { turns: number; seconds: number; tools: number }
 export type Found = { role: 'user' | 'assistant'; snippet: string }
 export type TimerState = { endsAt: number; left: number }
 export type Peer = { id: string; name: string; cwd: string; status: string; isSelf: boolean }
-export type Agent = { id: string; label: string; status: string }
+export type Agent = { id: string; label: string; status: string; type: string; parentId?: string }
 export type Diff = { path: string; text: string; note: string }
 export type Call = { id: string; tool: string; label: string; state: 'run' | 'ok' | 'fail'; ms?: number }
 export type Checkpoint = { id: number; path: string; copy: string | null; at: number }
@@ -82,6 +88,8 @@ declare module 'claude-code' {
       project: string
       git: Git | null
       turn: Turn | null
+      // The main loop's running turn, for the cancel button under its prompt.
+      liveTurn: { id: string; text: string } | null
       last: LastTurn | null
       history: LastTurn[]
       usage: Usage | null
@@ -104,6 +112,7 @@ declare module 'claude-code' {
       timer: TimerState | null
       expanded: string[]
       autoModel: string | null
+      autoEffort: 'low' | 'medium' | 'high' | null
       openCalls: string[]
       notices: Notice[]
       theme: string
@@ -122,6 +131,9 @@ declare module 'claude-code' {
       spentToday: number
       budgetLimit: number
       blast: Blast | null
+      testFail: string | null
+      lastAnswer: string
+      quotaWarned: string
     }
   }
 }

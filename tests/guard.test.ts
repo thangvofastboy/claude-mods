@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-const said = (r: { deny?: string; text?: string }) => r.deny ?? r.text ?? ''
+const said = (r: { deny?: string; text?: string; reason?: string }) => r.deny ?? r.reason ?? r.text ?? ''
 // Spelled apart, so no shell line that touches this file carries the patterns
 // the guard stops (it would stop that line too).
 const R = 'r' + 'm'
@@ -10,8 +10,8 @@ const PUSH = 'git ' + 'push'
 // spellings and lets the safe siblings through to what lies beneath. No clock
 // is mocked on purpose: the bookkeeping hook then fails, and the guard must
 // hold anyway.
-test('guard denies dangerous spellings and lets safe siblings through', async ($, on) => {
-  on('tool.call', () => ({ deny: 'reached-bottom' }))
+test('guard asks the person about dangerous spellings and lets safe siblings through', async ($, on) => {
+  on('tool.check', () => ({ decision: 'allow', reason: 'reached-bottom' }))
   on('ui.toast', () => ({ value: undefined }))
   mock.store(on)
   // This test is about the hard guard; held commands (blast) have their own test.
@@ -38,7 +38,9 @@ test('guard denies dangerous spellings and lets safe siblings through', async ($
     `${R} -rf '/'`,
     `git --git-dir .git push --force origin main`,
   ]) {
-    expect(said(await $.tool.call({ tool: 'Bash', command }))).toContain('terminal-polish')
+    const verdict = await $.tool.check({ tool: 'Bash', input: { command } })
+    expect(verdict.decision).toBe('ask')
+    expect(said(verdict)).toContain('terminal-polish')
   }
   for (const command of [
     `${PUSH} --force-with-lease origin main`,
@@ -49,31 +51,33 @@ test('guard denies dangerous spellings and lets safe siblings through', async ($
     `${R} -f ~/.cache/a`,
     `echo "${R} -rf is dangerous" > notes.txt`,
   ]) {
-    expect(said(await $.tool.call({ tool: 'Bash', command }))).toContain('reached-bottom')
+    expect((await $.tool.check({ tool: 'Bash', input: { command } })).reason).toContain('reached-bottom')
   }
 
-  const secret = await $.tool.call({ tool: 'Write', file_path: '/tmp/x/.env', content: 'A=1' })
-  expect(said(secret)).toContain('terminal-polish')
-  const template = await $.tool.call({ tool: 'Write', file_path: '/tmp/x/.env.example', content: 'A=' })
-  expect(said(template)).toContain('reached-bottom')
+  const secret = await $.tool.check({ tool: 'Write', input: { file_path: '/tmp/x/.env', content: 'A=1' } })
+  expect(secret.decision).toBe('ask')
+  expect(secret.reason).toContain('cần bạn duyệt')
+  const template = await $.tool.check({ tool: 'Write', input: { file_path: '/tmp/x/.env.example', content: 'A=' } })
+  expect(template.reason).toContain('reached-bottom')
 })
 
 test('Monitor runs a shell command, so the guard covers it too', async ($, on) => {
-  on('tool.call', () => ({ deny: 'reached-bottom' }))
+  on('tool.check', () => ({ decision: 'allow', reason: 'reached-bottom' }))
   on('ui.toast', () => ({ value: undefined }))
-  const ran = await $.tool.call({ tool: 'Monitor', command: `${R} -rf ~/*`, description: 'x' } as never)
-  expect(said(ran)).toContain('terminal-polish')
+  const verdict = await $.tool.check({ tool: 'Monitor', input: { command: `${R} -rf ~/*`, description: 'x' } } as never)
+  expect(verdict.decision).toBe('ask')
+  expect(said(verdict)).toContain('terminal-polish')
 })
 
 // A crafted command must not stall the hooks: the readings are linear.
 test('a huge whitespace-heavy command is read in linear time', async ($, on) => {
   mock.store(on)
   mock.clock(on)
-  on('tool.call', () => ({ deny: 'reached-bottom' }))
+  on('tool.check', () => ({ decision: 'allow', reason: 'reached-bottom' }))
   on('ui.toast', () => ({ value: undefined }))
   const command = `echo a${' '.repeat(200_000)}b${'\t '.repeat(50_000)}c`
   const started = performance.now()
-  expect(said(await $.tool.call({ tool: 'Bash', command }))).toContain('reached-bottom')
+  expect((await $.tool.check({ tool: 'Bash', input: { command } })).reason).toContain('reached-bottom')
   expect(performance.now() - started).toBeLessThan(2000)
 })
 

@@ -62,6 +62,18 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 🎛️ | **Trang trí** | Spinner tiếng Việt (`Đang nghĩ…`, `Đang chạy tool…`), dòng `✓ Xong sau 12s` và gợi ý `/mods ⚙`. |
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
+| 🤖 | **Đếm agent** | Khi có subagent đang chạy, dải trạng thái hiện `🤖 2 chạy · 5/8 xong`. |
+| 📋 | **Nút dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có **⧉ Sao chép**; tin của lượt đang chạy có thêm **■ Huỷ** để dừng lượt đó. Tắt: `/mods msgactions`. |
+| 🧭 | **Lịch sử prompt** | `/mods history <x>` tìm x trong prompt của session này và tối đa 8 session gần đây trong dự án (không đảm bảo đúng thứ tự mới nhất). |
+| 🧾 | **Soạn mô tả PR** | `/mods pr` soạn sẵn mô tả PR từ các commit và file thay đổi so với `main` (hoặc `master`). |
+| 📌 | **Ghim câu trả lời** | `/mods pin` ghim câu trả lời gần nhất của Claude vào ghi chú dự án. |
+| 📊 | **Quota và giờ reset** | `/mods quota` cho biết mức dùng 5h/7d và còn bao lâu nữa reset. Từ 90% có cảnh báo, mỗi cửa sổ chỉ báo một lần. |
+| ✗ | **Test lỗi trên dải trạng thái** | Sau lệnh test thất bại, dải trạng thái hiện tên test lỗi đầu tiên. Tắt: `/mods testfail`. |
+| 🧪 | **Test liên quan khi sửa file** | Bật `relatedtest`: sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest). Mặc định tắt vì tốn thời gian. |
+| ❓ | **Báo khi Claude hỏi** | Khi Claude hỏi bạn (AskUserQuestion), có thông báo hệ điều hành để bạn không bỏ lỡ. Tắt: `/mods asknotify`. |
+| 💰 | **Giới hạn 7 ngày** | `/mods budget week 30` đặt giới hạn chi tiêu cho 7 ngày qua, chặn prompt mới khi vượt; bỏ: `/mods budget week off`. Cần bật `budget`. |
+| 🎚️ | **Auto model** | Bật `/mods automodel`: lượt đơn giản chạy Haiku (effort thấp), lượt phức tạp giữ model của bạn nhưng effort cao. Subagent Claude không chỉ định model thì được chọn theo việc: tìm/đọc → Haiku · low, viết code/test → Sonnet · medium, review/thiết kế/debug → Opus · high. Claude cũng được hướng dẫn tự đặt `model` khi gọi Agent. Dải trạng thái hiện `⚡haiku` hoặc `⚡high`. |
+| 🌙 | **Giờ yên lặng** | `/mods quiet` tắt thông báo hệ điều hành, âm thanh và đọc to từ 22h đến 8h. Mặc định tắt. |
 | 🔔 | **Thông báo nổi bật** | Mọi thông báo đều có icon theo loại (✅ ❌ 🛡 💰 ⏰ 🎉 💡), kèm một dòng có nét bo `╰` màu theo loại hiện vài giây trên dải trạng thái. |
 | 🖱️ | **Rê chuột đổi màu** | Rê chuột lên dòng tool thì dòng đổi màu; bấm mới mở chi tiết. |
 
@@ -70,7 +82,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | | Bảng | Có gì |
 | :-: | --- | --- |
 | 🗂️ | **Sessions** | Các session Claude đang chạy trên máy, bận/rảnh; nhắn tin sang session khác, copy lệnh resume. |
-| 📈 | **Hoạt động** | Subagent, git, biểu đồ tốc độ, heatmap 8 tuần, file đã sửa có nhãn màu theo loại (bấm để xem **diff**), các tool gần đây ở dạng gọn: rê chuột thì dòng đổi màu, bấm **▸** để mở khung chi tiết (lệnh đầy đủ, trạng thái, thời gian chạy). |
+| 📈 | **Hoạt động** | Agent: số đang chạy · xong · lỗi / tổng, mỗi agent có loại, mô tả, trạng thái (agent con thụt vào dưới agent cha); các tiến trình đang chạy (Bash, Agent, Workflow…); git, biểu đồ tốc độ, heatmap 8 tuần, file đã sửa có nhãn màu theo loại (bấm để xem **diff**), các tool gần đây ở dạng gọn: rê chuột thì dòng đổi màu, bấm **▸** để mở khung chi tiết (lệnh đầy đủ, trạng thái, thời gian chạy). |
 | ⚡ | **Prompt nhanh** | Lưu prompt hay dùng thành nút bấm, phím tắt `1`–`9`. |
 | ☐ | **TODO** | Tự gom `TODO`/`FIXME` Claude viết vào code và các mục `- [ ]` trong câu trả lời; bấm để đánh dấu xong. |
 | 📌 | **Ghi chú** | Ghi chú riêng từng dự án, có nút gửi cho Claude. |
@@ -205,14 +217,14 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `notify` thông báo | ✅ | | `branchlock` khóa nhánh | ⬜ |
 | `sound` âm thanh | ⬜ | | `format` tự format | ⬜ |
 | `voice` đọc to | ⬜ | | `autocheck` tự kiểm tra | ⬜ |
-| `guard` chặn lệnh nguy hiểm | ✅ | | `compactplus` compact thông minh | ✅ |
+| `guard` hỏi trước lệnh nguy hiểm | ✅ | | `compactplus` compact thông minh | ✅ |
 | `decor` spinner & gợi ý | ✅ | | `todos` gom TODO | ✅ |
 | `quota` thanh quota | ✅ | | `gradient` chữ chuyển màu | ✅ |
 | `autocompact` tự compact | ⬜ | | `powerline` kiểu powerline | ⬜ |
 | `abbrev` từ viết tắt | ✅ | | `meters` thanh đo | ✅ |
 | `rules` luật dự án | ✅ | | `statecolor` viền theo trạng thái | ✅ |
 | `tools` tool & subagent cho Claude | ✅ | | `fileicons` nhãn loại file | ✅ |
-| `automodel` tự chọn model | ⬜ | | `anim` vệt sáng | ✅ |
+| `automodel` tự chọn model & effort theo task và agent | ⬜ | | `anim` vệt sáng | ✅ |
 | `journal` nhật ký | ✅ | | `confetti` pháo hoa | ✅ |
 | `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
 | `badges` badge tool | ✅ | | `heatmap` · `images` logo & thumbnail ảnh | ✅ |
@@ -220,6 +232,10 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `compact` dải trạng thái 1 hàng | ⬜ | | `weather` thời tiết context | ✅ |
 | `blast` xem trước lệnh rủi ro | ✅ | | `fun` câu vui & dự báo hài | ✅ |
 | `ctxwarn` nhắc /compact | ✅ | | `autoupdate` tự cập nhật khi mở Claude | ✅ |
+| `msgactions` nút dưới tin nhắn | ✅ | | | | |
+| `asknotify` báo khi Claude hỏi | ✅ | | `quotaalert` cảnh báo quota 90% | ✅ |
+| `quiet` giờ yên lặng 22h–8h | ⬜ | | `testfail` tên test lỗi | ✅ |
+| `relatedtest` test liên quan khi sửa | ⬜ | | | | |
 
 ---
 
