@@ -63,7 +63,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
 | 🤖 | **Đếm agent** | Khi có subagent đang chạy, dải trạng thái hiện `🤖 2 chạy · 5/8 xong`. |
-| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có icon ⧉ (sao chép) và ★ (lưu vào Prompt nhanh); lượt lỗi có thêm ↻ (gửi lại); tin của lượt đang chạy có thêm ✎ (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và ■ (huỷ lượt). Dưới mỗi câu trả lời có nút sao chép cho từng khối code. Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
+| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có icon 📋 (sao chép) và ⭐ (lưu vào Prompt nhanh); lượt lỗi có thêm 🔄 (gửi lại); tin của lượt đang chạy có thêm 📝 (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và 🛑 (huỷ lượt). Dưới mỗi câu trả lời có nút sao chép cho từng khối code, và nút 🔗 cho mỗi link (mở trong trình duyệt) hay file trong `backtick` (mở bằng ứng dụng mặc định). Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
 | 🧭 | **Lịch sử prompt** | `/mods history <x>` tìm x trong prompt của session này và tối đa 8 session gần đây trong dự án (không đảm bảo đúng thứ tự mới nhất). |
 | 🧾 | **Soạn mô tả PR** | `/mods pr` soạn sẵn mô tả PR từ các commit và file thay đổi so với `main` (hoặc `master`). |
 | 📌 | **Ghim câu trả lời** | `/mods pin` ghim câu trả lời gần nhất của Claude vào ghi chú dự án. |

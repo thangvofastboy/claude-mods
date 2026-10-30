@@ -151,7 +151,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
   autoupdate: 'tự cập nhật plugin lên tag mới nhất khi mở Claude (kiểm tra tối đa 6 giờ một lần, chỉ bản cài từ marketplace)',
-  msgactions: 'icon dưới tin nhắn bạn đã gửi: ⧉ sao chép, ★ lưu vào Prompt nhanh, ↻ gửi lại khi lượt lỗi, ✎ sửa và ■ huỷ (lượt đang chạy); nút sao chép từng code block dưới câu trả lời',
+  msgactions: 'icon dưới tin nhắn bạn đã gửi: 📋 sao chép, ⭐ lưu vào Prompt nhanh, 🔄 gửi lại khi lượt lỗi, 📝 sửa và 🛑 huỷ (lượt đang chạy); nút sao chép từng code block và 🔗 mở link (trình duyệt) / file (ứng dụng mặc định) dưới câu trả lời',
   asknotify: 'báo khi Claude hỏi bạn (AskUserQuestion), để bạn làm việc khác',
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
@@ -716,6 +716,16 @@ export function prDraft(log: string, stat: string) {
 export const codeBlocks = (text: string) =>
   [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map(m => ({ lang: (m[1] ?? '').trim(), code: (m[2] ?? '').replace(/\n$/, '') }))
 
+// Links and file paths a reply mentions, outside fenced code. A file counts only in `backticks` with an extension; a :line suffix is dropped.
+export const linksOf = (text: string) => {
+  const prose = text.replace(/```[\s\S]*?```/g, '')
+  const urls = [...prose.matchAll(/https?:\/\/[^\s<>()`'"\]]+/g)].map(m => m[0].replace(/[.,;:!?*_]+$/, ''))
+  const files = [...prose.matchAll(/`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]+)*\.\w+)(?::\d+(?::\d+)?)?`/g)]
+    .map(m => m[1] ?? '')
+    .filter(f => !/^https?:/.test(f))
+  return [...new Set([...urls, ...files])].slice(0, 8)
+}
+
 export const pinText = (answer: string) => {
   const t = answer.trim()
   return t.length > PIN_MAX ? `${t.slice(0, PIN_MAX)}…` : t
@@ -1185,13 +1195,26 @@ function thumbSize(data: string) {
   return { columns: Math.max(1, Math.min(20, Math.round((rows * 2 * w) / h))), rows }
 }
 
+const OPEN = '{ command -v xdg-open >/dev/null && opener=xdg-open || opener=open; } && ("$opener" "$f" >/dev/null 2>&1 &)'
+
+// A URL opens in the browser, a file in the app the desktop picks for it.
+export async function openTarget($: EngineInterface, target: string) {
+  const script = /^https?:/.test(target)
+    ? `f="$1" && ${OPEN}`
+    : `f="$1"; case "$f" in "~/"*) f="$HOME/\${f#\~/}";; -*) f="./$f";; esac; [ -e "$f" ] || { echo "không tồn tại: $1" >&2; exit 1; }; ${OPEN}`
+  // Relative paths in a reply are relative to the project, not to wherever the engine runs.
+  const cwd = (await read($, root)) || undefined
+  const run = await $.process.run(['sh', '-c', script, 'sh', target], { cwd, timeoutMs: 10000 })
+  if (run.exitCode !== 0) void notice($, `Không mở được: ${run.stderr.trim() || run.exitCode}`)
+}
+
 export async function openPic($: EngineInterface, pic: Pic) {
   const ext = pic.mediaType.split('/')[1]?.replace(/[^a-z0-9]/g, '') || 'png'
   const run = await $.process.run(
     [
       'sh',
       '-c',
-      'f=$(mktemp "${TMPDIR:-/tmp}/claude-image-XXXXXX.$1") && base64 -d > "$f" && { command -v xdg-open >/dev/null && opener=xdg-open || opener=open; } && ("$opener" "$f" >/dev/null 2>&1 &)',
+      'f=$(mktemp "${TMPDIR:-/tmp}/claude-image-XXXXXX.$1") && base64 -d > "$f" && ' + OPEN,
       'sh',
       ext,
     ],
@@ -4635,10 +4658,10 @@ export const register: Register = on => {
     const actions = s.msgactions ? (
       <Box flexDirection="row" gap={2} marginLeft={bracket ? 4 : 2}>
         <Button key={`copy-${e.requestId}`} label="Sao chép" plain onPress={() => void copyText($, e.props.text)}>
-          {icon('⧉', P.cyan)}
+          {icon('📋', P.cyan)}
         </Button>
         <Button key={`save-${e.requestId}`} label="Lưu" plain onPress={() => void savePrompt($, e.props.text)}>
-          {icon('★', P.ok)}
+          {icon('⭐', P.ok)}
         </Button>
         {lost?.text === e.props.text && !liveId ? (
           <Button
@@ -4647,7 +4670,7 @@ export const register: Register = on => {
             plain
             onPress={() => void $.prompt.submit({ text: e.props.text })}
           >
-            {icon('↻', P.info)}
+            {icon('🔄', P.info)}
           </Button>
         ) : null}
         {liveId && !work?.edits ? (
@@ -4662,7 +4685,7 @@ export const register: Register = on => {
                 .then(() => $.prompt.fill({ text: e.props.text, mode: 'replace' }))
             }
           >
-            {icon('✎', P.warn)}
+            {icon('📝', P.warn)}
           </Button>
         ) : null}
         {liveId ? (
@@ -4672,7 +4695,7 @@ export const register: Register = on => {
             plain
             onPress={() => void $.turn.abort({ turnId: liveId }).catch(() => undefined)}
           >
-            {icon('■', P.err)}
+            {icon('🛑', P.err)}
           </Button>
         ) : null}
       </Box>
@@ -4693,8 +4716,10 @@ export const register: Register = on => {
   // Each fenced code block of a reply gets a copy button under the reply.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const s = await read($, settings)
-    const blocks = s.msgactions && !e.props.isSummary ? codeBlocks(e.props.text) : []
-    if (!blocks.length) return next(e)
+    const show = s.msgactions && !e.props.isSummary
+    const blocks = show ? codeBlocks(e.props.text) : []
+    const links = show ? linksOf(e.props.text) : []
+    if (!blocks.length && !links.length) return next(e)
     const [P] = await look($)
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
@@ -4703,13 +4728,18 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={2} marginLeft={2}>
           {blocks.map((b, i) => (
             <Button
-              key={`code-${i}`}
+              key={`code-${e.requestId}-${i}`}
               label={`Sao chép code ${b.lang || i + 1}`}
               plain
               dimColor
               onPress={() => void copyText($, b.code)}
             >
-              <Text color={P.cyan}>⧉</Text>
+              <Text color={P.cyan}>📋</Text>
+            </Button>
+          ))}
+          {links.map((l, i) => (
+            <Button key={`open-${e.requestId}-${i}`} label={baseName(l.replace(/\/+$/, '')) || l} plain dimColor onPress={() => void openTarget($, l)}>
+              <Text color={P.cyan}>🔗</Text>
             </Button>
           ))}
         </Box>

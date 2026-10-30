@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { codeBlocks } from '../hooks/register'
+import { codeBlocks, linksOf } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -287,8 +287,8 @@ test('a sent prompt shows the copy icon without its label text', async ($, on) =
     requestId: 'r1',
     props: { text: 'xin chào', origin: { kind: 'composer' }, isExpanded: false },
   })
-  expect((await ui.find({ key: 'copy-r1' }))?.text).toBe('⧉')
-  expect((await ui.find({ key: 'save-r1' }))?.text).toBe('★')
+  expect((await ui.find({ key: 'copy-r1' }))?.text).toBe('📋')
+  expect((await ui.find({ key: 'save-r1' }))?.text).toBe('⭐')
   expect(await ui.findAll({ type: 'Text', text: /Sao chép/ })).toEqual([])
   await ui.unmount()
 })
@@ -311,7 +311,13 @@ test('each fenced block of a reply gets its own copy button', async ($, on) => {
     requestId: 'a1',
     props: { text, isFirstOfReply: true },
   })
-  expect(await ui.find({ key: 'code-0' })).toBeDefined()
-  expect(await ui.find({ key: 'code-1' })).toBeDefined()
+  expect(await ui.find({ key: 'code-a1-0' })).toBeDefined()
+  expect(await ui.find({ key: 'code-a1-1' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a reply lists its links and backticked files, skipping code blocks', () => {
+  const text = 'Xem https://example.com/a?b=1. và `hooks/register.tsx:42`, `~/x.md`.\n```\nhttps://inside.dev `no.ts`\n```'
+  expect(linksOf(text)).toEqual(['https://example.com/a?b=1', 'hooks/register.tsx', '~/x.md'])
+  expect(linksOf('**https://x.dev/y**')).toEqual(['https://x.dev/y'])
 })
