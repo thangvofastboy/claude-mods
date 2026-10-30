@@ -10,9 +10,9 @@
       "source": {
         "source": "github",
         "repo": "thangvofastboy/claude-mods",
-        "ref": "v0.15.0"
+        "ref": "v0.16.0"
       },
-      "version": "0.15.0",
+      "version": "0.16.0",
       "description": "/mods: status band, sessions sidebar, activity dashboard, quick prompts, command guard, TL;DR and notifications"
     },
     {
