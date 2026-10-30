@@ -78,6 +78,8 @@ export type Category = { name: string; tokens: number; color: string }
 export type Breakdown = { categories: Category[]; total: number; max: number }
 export type Notice = { id: number; icon: string; kind: 'ok' | 'err' | 'warn' | 'info' | 'pink'; text: string }
 export type SplashInfo = { greeting: string; last: string; tip: string; forecast?: string }
+// A claude-swap profile as `/profile list --json` gives it.
+export type Account = { name: string; email: string | null; active: boolean; disabled: boolean }
 // A risky shell command held until the person runs or cancels it, and what it would change.
 export type Blast = { id: string; command: string; title: string; lines: string[]; note: string }
 
@@ -135,6 +137,8 @@ declare module 'claude-code' {
       testFail: string | null
       lastAnswer: string
       quotaWarned: string
+      // null until the accounts pane first loads.
+      accounts: { list: Account[]; note: string } | null
     }
   }
 }

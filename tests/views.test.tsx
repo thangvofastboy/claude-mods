@@ -321,3 +321,96 @@ test('a reply lists its links and backticked files, skipping code blocks', () =>
   expect(linksOf(text)).toEqual(['https://example.com/a?b=1', 'hooks/register.tsx', '~/x.md'])
   expect(linksOf('**https://x.dev/y**')).toEqual(['https://x.dev/y'])
 })
+
+test('a scene theme draws its animated strip on desktop only', async ($, on) => {
+  mock.store(on)
+  await $.command.run({
+    command: 'mods',
+    args: 'theme thaicuc',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+  const band = {
+    plugin: 'terminal-polish',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  } as const
+  const desk = await $.ui.mount({ ...band, surface: 'desktop' })
+  const svg = await desk.find({ type: 'Svg' })
+  expect(svg).toBeDefined()
+  await desk.unmount()
+  const term = await $.ui.mount({ ...band, surface: 'terminal' })
+  expect(await term.find({ type: 'Svg' })).toBeUndefined()
+  await term.unmount()
+})
+
+test('/mods accounts lists claude-swap profiles and switches through /profile', async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  const calls: string[] = []
+  let active = 'work'
+  on('command.run', { command: 'profile' }, (_$, e) => {
+    calls.push(e.args)
+    if (e.args === 'list --json') {
+      return {
+        text: JSON.stringify({
+          active,
+          profiles: ['work', 'home'].map(name => ({ name, active: name === active, email: `${name}@x.io`, tags: [], disabled: false })),
+        }),
+      }
+    }
+    active = e.args.replace('swap ', '')
+    return { text: `🔀 ${active}` }
+  })
+  const run = (args: string) =>
+    $.command.run({ command: 'mods', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+
+  await run('accounts')
+  await clock.advance(500)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'terminal-polish-accounts',
+    props: { title: 'Tài khoản Claude', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  })
+  expect(await ui.find({ type: 'Text', text: 'home@x.io' })).toBeDefined()
+  await ui.press({ key: 'acc-use-1' })
+  expect(calls).toContain('swap home')
+  expect(active).toBe('home')
+  await ui.unmount()
+
+  expect((await run('accounts --force')).text).toContain('không hợp lệ')
+})
+
+test('/mods clear empties the prompt box', async ($, on) => {
+  mock.store(on)
+  const fills: string[] = []
+  on('prompt.fill', (_$, e) => {
+    fills.push(e.text)
+    return { isFilled: true } as never
+  })
+  const ran = await $.command.run({ command: 'mods', args: 'clear', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  expect(fills).toEqual([''])
+  expect(ran.text).toContain('Đã xoá')
+})
+
+test('the band has a clear icon that empties the prompt box', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  const fills: string[] = []
+  on('prompt.fill', (_$, e) => {
+    fills.push(e.text)
+    return { isFilled: true } as never
+  })
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  })
+  await ui.press({ key: 'clear' })
+  expect(fills).toEqual([''])
+  await ui.unmount()
+})

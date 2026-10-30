@@ -4,12 +4,12 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-48%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-73%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
-![Themes](https://img.shields.io/badge/themes-11-5b8def?style=for-the-badge)
+![Themes](https://img.shields.io/badge/themes-17-5b8def?style=for-the-badge)
 
 **Một lệnh `/mods`, cả chục thứ tiện lợi.**<br/>
-Dải trạng thái sống động · bảng điều khiển · 11 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
+Dải trạng thái sống động · bảng điều khiển · 17 theme màu · chặn lệnh nguy hiểm · hoàn tác · ngân sách · TODO · và nhiều hơn nữa.
 
 [🚀 Cài đặt](#-cài-đặt) ·
 [✨ Tính năng](#-tính-năng) ·
@@ -92,6 +92,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ✂️ | **Đoạn bôi đen** | Giải thích, dịch Việt ⇄ Anh, tóm tắt, hoặc copy sạch đoạn bạn vừa bôi đen. |
 | 🔎 | **Tìm kiếm** | Tìm trong hội thoại hiện tại, kèm đoạn văn xung quanh chỗ tìm thấy. |
 | ⚙️ | **Cài đặt** | Bật/tắt mọi tính năng và chọn theme. |
+| 👤 | **Tài khoản Claude** | `/mods accounts` mở bảng các profile của claude-swap: bấm **Đổi** (phím 1-9) để chuyển tài khoản, nhập tên để lưu tài khoản vừa `/login`, ✕ điền sẵn lệnh xoá để bạn tự gửi. Mọi thao tác đi qua `/profile`, mod không đụng tới token. |
 
 ### 🛡️ An toàn
 
@@ -145,6 +146,8 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | `/mods` | Hướng dẫn và trạng thái từng tính năng |
 | `/mods settings` | ⚙️ Tab cài đặt |
 | `/mods theme <tên>` | 🎨 Đổi bảng màu |
+| `/mods clear` | 🧹 Xoá nội dung đang gõ trong ô nhập |
+| `/mods accounts [tên]` | 👤 Bảng tài khoản Claude: thêm, xoá, đổi nhanh (cần [claude-swap](https://github.com/thangvofastboy/claude-swap)); có `tên` thì đổi luôn |
 | `/mods sessions` | 🗂️ Các session đang chạy |
 | `/mods dash` | 📈 Bảng hoạt động |
 | `/mods prompts` · `save <prompt>` | ⚡ Prompt nhanh |
@@ -198,8 +201,14 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | `abyss` 🌊 | ![](https://img.shields.io/badge/-%20-0ea5e9?style=flat-square) ![](https://img.shields.io/badge/-%20-14b8a6?style=flat-square) ![](https://img.shields.io/badge/-%20-2dd4bf?style=flat-square) ![](https://img.shields.io/badge/-%20-99f6e4?style=flat-square) | Navy sâu kèm xanh ngọc, nền `#06142b` |
 | `nightowl` 🌊 | ![](https://img.shields.io/badge/-%20-c792ea?style=flat-square) ![](https://img.shields.io/badge/-%20-82aaff?style=flat-square) ![](https://img.shields.io/badge/-%20-7fdbca?style=flat-square) ![](https://img.shields.io/badge/-%20-addb67?style=flat-square) | Night Owl, nền `#011627` |
 | `cobalt` 🌊 | ![](https://img.shields.io/badge/-%20-ffc600?style=flat-square) ![](https://img.shields.io/badge/-%20-ff9d00?style=flat-square) ![](https://img.shields.io/badge/-%20-3ca0ff?style=flat-square) ![](https://img.shields.io/badge/-%20-9effff?style=flat-square) | Cobalt2, navy với vàng nổi bật, nền `#193549` |
+| `rosepine` | ![](https://img.shields.io/badge/-%20-eb6f92?style=flat-square) ![](https://img.shields.io/badge/-%20-ebbcba?style=flat-square) ![](https://img.shields.io/badge/-%20-c4a7e7?style=flat-square) ![](https://img.shields.io/badge/-%20-9ccfd8?style=flat-square) | Rosé Pine |
+| `kanagawa` | ![](https://img.shields.io/badge/-%20-957fb8?style=flat-square) ![](https://img.shields.io/badge/-%20-7e9cd8?style=flat-square) ![](https://img.shields.io/badge/-%20-7fb4ca?style=flat-square) ![](https://img.shields.io/badge/-%20-e6c384?style=flat-square) | Kanagawa Wave |
+| `thaicuc` ☯️ | ![](https://img.shields.io/badge/-%20-f2efe6?style=flat-square) ![](https://img.shields.io/badge/-%20-bdb8aa?style=flat-square) ![](https://img.shields.io/badge/-%20-7fb685?style=flat-square) ![](https://img.shields.io/badge/-%20-c8423b?style=flat-square) | Thái Cực: Âm Dương xoay, quẻ bát quái nhấp nháy, nền `#141414` |
+| `tutien` ☯️ | ![](https://img.shields.io/badge/-%20-7a4cff?style=flat-square) ![](https://img.shields.io/badge/-%20-b48cff?style=flat-square) ![](https://img.shields.io/badge/-%20-f0c75e?style=flat-square) ![](https://img.shields.io/badge/-%20-fff1b8?style=flat-square) | Tu tiên: linh khí vàng bay lên trên sương tím, nền `#140c24` |
+| `linhson` ☯️ | ![](https://img.shields.io/badge/-%20-2f5d50?style=flat-square) ![](https://img.shields.io/badge/-%20-4f9478?style=flat-square) ![](https://img.shields.io/badge/-%20-7cc4a4?style=flat-square) ![](https://img.shields.io/badge/-%20-d6eadf?style=flat-square) | Linh Sơn: núi thủy mặc, mây trôi ngang, nền `#0f1d1a` |
+| `tinhha` ☯️ | ![](https://img.shields.io/badge/-%20-3a4cc8?style=flat-square) ![](https://img.shields.io/badge/-%20-8fb8ff?style=flat-square) ![](https://img.shields.io/badge/-%20-c3a6ff?style=flat-square) ![](https://img.shields.io/badge/-%20-ffe9b8?style=flat-square) | Tinh Hà: dải ngân hà, sao lấp lánh, sao băng, nền `#070a1a` |
 
-🌊 = họ **navy blue dark**. Khi đổi sang một theme có tên, `/mods theme` gợi ý luôn màu nền terminal khớp với nó.
+🌊 = họ **navy blue dark**. ☯️ = họ **Đạo giáo / tu tiên**, có **hình nền động** (dải SVG chuyển động trên dải trạng thái, chỉ Claude Code Desktop; tắt bằng `/mods anim`). Khi đổi sang một theme có tên, `/mods theme` gợi ý luôn màu nền terminal khớp với nó.
 
 > [!NOTE]
 > Các theme có tên được thiết kế cho nền tối. Màu hex cần terminal hỗ trợ truecolor; tmux cần bật `Tc`/`RGB`.
@@ -225,7 +234,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `abbrev` từ viết tắt | ✅ | | `meters` thanh đo | ✅ |
 | `rules` luật dự án | ✅ | | `statecolor` viền theo trạng thái | ✅ |
 | `tools` tool & subagent cho Claude | ✅ | | `fileicons` nhãn loại file | ✅ |
-| `automodel` tự chọn model & effort theo task và agent | ⬜ | | `anim` vệt sáng | ✅ |
+| `automodel` tự chọn model & effort theo task và agent | ⬜ | | `anim` vệt sáng / hình nền động | ✅ |
 | `journal` nhật ký | ✅ | | `confetti` pháo hoa | ✅ |
 | `collapse` thu gọn output | ✅ | | `splash` màn chào | ✅ |
 | `badges` badge tool | ✅ | | `heatmap` · `images` logo & thumbnail ảnh | ✅ |
@@ -319,7 +328,7 @@ Muốn nhẹ hơn nữa, tắt những thứ tốn nhất:
 
 | Lệnh | Tiết kiệm |
 | --- | --- |
-| `/mods anim` | hiệu ứng vệt sáng (~12 khung hình/giây trong lúc Claude chạy) |
+| `/mods anim` | hiệu ứng vệt sáng (~12 khung hình/giây trong lúc Claude chạy) trên terminal; hình nền động của theme ☯️ trên Desktop |
 | `/mods tldr` | lời gọi Haiku cuối mỗi câu trả lời dài (có thể giữ cuối lượt tới 8 giây) |
 | `/mods format`, `/mods autocheck` | chạy formatter / lệnh kiểm tra sau khi sửa file |
 | `/mods gradient` | mỗi ký tự tiêu đề là một phần tử màu riêng |

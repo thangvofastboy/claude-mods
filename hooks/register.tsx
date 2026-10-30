@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type {
+  Account,
   Agent,
   Blast,
   Breakdown,
@@ -35,6 +36,7 @@ const TODO_PANE = 'terminal-polish-todo'
 const NOTES_PANE = 'terminal-polish-notes'
 const COMMIT_PANE = 'terminal-polish-commit'
 const CONTEXT_PANE = 'terminal-polish-context'
+const ACCOUNTS_PANE = 'terminal-polish-accounts'
 // Not `!`: a leading `!` in the composer runs a shell command and never reaches prompt.submit.
 const BYPASS = '>>'
 const MAX_CHECKPOINTS = 50
@@ -134,7 +136,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   meters: 'thanh đo màu ▰▰▱ cho context và quota',
   statecolor: 'viền dải trạng thái đổi màu theo trạng thái',
   fileicons: 'nhãn màu theo loại file trong bảng hoạt động',
-  anim: 'vệt sáng chạy khi Claude đang làm (chỉ terminal)',
+  anim: 'vệt sáng khi Claude đang làm (terminal), hình nền động của theme (desktop)',
   confetti: 'thông báo "Test pass!" và pháo hoa khi test pass hoặc xong việc dài (pháo hoa chỉ ở terminal)',
   splash: 'màn chào khi mở session',
   splashhide: 'tự ẩn màn chào khi gửi prompt đầu tiên (tắt: màn chào giữ nguyên)',
@@ -232,6 +234,7 @@ const heat = atom({ plugin: 'terminal-polish', key: 'heat' } as const, {})
 const checkpoints = atom({ plugin: 'terminal-polish', key: 'checkpoints' } as const, [])
 const todos = atom({ plugin: 'terminal-polish', key: 'todos' } as const, [])
 const notes = atom({ plugin: 'terminal-polish', key: 'notes' } as const, [])
+const accounts = atom({ plugin: 'terminal-polish', key: 'accounts' } as const, null)
 const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
 const check = atom({ plugin: 'terminal-polish', key: 'check' } as const, null)
 const checkCommand = atom({ plugin: 'terminal-polish', key: 'checkCommand' } as const, '')
@@ -1315,6 +1318,8 @@ type Palette = {
   meter: readonly [string, string, string]
   // The terminal background the theme was drawn for; the mod cannot set it, it only suggests it.
   bg?: string
+  // An animated SVG strip the desktop draws in the band (sceneSvg).
+  scene?: 'taiji' | 'qi' | 'mist' | 'stars'
 }
 
 const AUTO: Palette = {
@@ -1485,6 +1490,162 @@ const THEMES: Record<string, Palette> = {
     meter: ['#3ad900', '#ffc600', '#ff7aa0'],
     bg: '#193549',
   },
+  rosepine: {
+    accent: '#c4a7e7',
+    ok: '#9ccfd8',
+    warn: '#f6c177',
+    err: '#eb6f92',
+    info: '#31748f',
+    muted: '#6e6a86',
+    violet: '#c4a7e7',
+    cyan: '#9ccfd8',
+    pink: '#ebbcba',
+    ink: '#191724',
+    grad: ['#eb6f92', '#ebbcba', '#c4a7e7', '#9ccfd8'],
+    meter: ['#9ccfd8', '#f6c177', '#eb6f92'],
+    bg: '#191724',
+  },
+  kanagawa: {
+    accent: '#7e9cd8',
+    ok: '#98bb6c',
+    warn: '#e6c384',
+    err: '#e82424',
+    info: '#7fb4ca',
+    muted: '#727169',
+    violet: '#957fb8',
+    cyan: '#6a9589',
+    pink: '#d27e99',
+    ink: '#1f1f28',
+    grad: ['#957fb8', '#7e9cd8', '#7fb4ca', '#e6c384'],
+    meter: ['#98bb6c', '#e6c384', '#e82424'],
+    bg: '#1f1f28',
+  },
+  // ---- Đạo giáo / tu tiên family: animated scenes on the desktop
+  thaicuc: {
+    accent: '#e8e4d8',
+    ok: '#7fb685',
+    warn: '#d9a441',
+    err: '#c8423b',
+    info: '#8fb3b0',
+    muted: '#6b6760',
+    violet: '#a89cc8',
+    cyan: '#8fb3b0',
+    pink: '#d98c80',
+    ink: '#141414',
+    grad: ['#f2efe6', '#bdb8aa', '#7fb685', '#c8423b'],
+    meter: ['#7fb685', '#d9a441', '#c8423b'],
+    bg: '#141414',
+    scene: 'taiji',
+  },
+  tutien: {
+    accent: '#f0c75e',
+    ok: '#6fd3a0',
+    warn: '#f0a35e',
+    err: '#e5534b',
+    info: '#9d8cff',
+    muted: '#6c6290',
+    violet: '#b48cff',
+    cyan: '#7ae0e0',
+    pink: '#f29fd0',
+    ink: '#140c24',
+    grad: ['#7a4cff', '#b48cff', '#f0c75e', '#fff1b8'],
+    meter: ['#6fd3a0', '#f0c75e', '#e5534b'],
+    bg: '#140c24',
+    scene: 'qi',
+  },
+  linhson: {
+    accent: '#7cc4a4',
+    ok: '#8fce8f',
+    warn: '#e3c27a',
+    err: '#d9665b',
+    info: '#8ab8d6',
+    muted: '#5f7a72',
+    violet: '#a3a6d6',
+    cyan: '#88d0c8',
+    pink: '#e3a5b5',
+    ink: '#0f1d1a',
+    grad: ['#2f5d50', '#4f9478', '#7cc4a4', '#d6eadf'],
+    meter: ['#8fce8f', '#e3c27a', '#d9665b'],
+    bg: '#0f1d1a',
+    scene: 'mist',
+  },
+  tinhha: {
+    accent: '#8fb8ff',
+    ok: '#7ee0a8',
+    warn: '#ffd27a',
+    err: '#ff7a8a',
+    info: '#8fb8ff',
+    muted: '#5a6488',
+    violet: '#c3a6ff',
+    cyan: '#7fe7ff',
+    pink: '#ffa6d9',
+    ink: '#070a1a',
+    grad: ['#3a4cc8', '#8fb8ff', '#c3a6ff', '#ffe9b8'],
+    meter: ['#7ee0a8', '#ffd27a', '#ff7a8a'],
+    bg: '#070a1a',
+    scene: 'stars',
+  },
+}
+
+// A wide strip of SMIL animation for themes with a scene. Deterministic per palette: a new
+// `source` would reload the sandboxed frame and restart the animation on every band render.
+const SCENE_H = 36
+const sceneCache = new Map<string, string>()
+function sceneSvg(P: Palette): string | null {
+  if (!P.scene) return null
+  const cacheKey = `${P.scene}|${P.bg}|${P.grad.join()}`
+  const hit = sceneCache.get(cacheKey)
+  if (hit) return hit
+  const bg = P.bg ?? '#000'
+  const [a = '#fff', b = a, c = b, d = c] = P.grad
+  // A fixed pseudo-random spread, the same on every call.
+  const spots = (n: number, k: number) =>
+    Array.from({ length: n }, (_, i) => ({ x: (i * 97 + k * 31) % 800, y: (i * 53 + k * 17) % SCENE_H, i }))
+  const body = (() => {
+    switch (P.scene) {
+      case 'taiji': {
+        // Yin-yang turning at the center, trigram bars drifting, ink mist behind.
+        const R = 14
+        const fish = `<g transform="translate(400 18)"><g><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="12s" repeatCount="indefinite"/><circle r="${R}" fill="${a}"/><path d="M0 -${R} A${R} ${R} 0 0 0 0 ${R} A${R / 2} ${R / 2} 0 0 0 0 0 A${R / 2} ${R / 2} 0 0 1 0 -${R}Z" fill="${bg}"/><circle cy="-${R / 2}" r="2.5" fill="${bg}"/><circle cy="${R / 2}" r="2.5" fill="${a}"/></g></g>`
+        const trigrams = spots(8, 1)
+          .map(
+            ({ x, i }) =>
+              `<g opacity="0.35" transform="translate(${(x + 60) % 760} 10)">${[0, 6, 12]
+                .map(y => ((i >> (y / 6)) & 1 ? `<rect y="${y}" width="16" height="3" fill="${c}"/>` : `<rect y="${y}" width="7" height="3" fill="${c}"/><rect x="9" y="${y}" width="7" height="3" fill="${c}"/>`))
+                .join('')}<animate attributeName="opacity" values="0.1;0.45;0.1" dur="${4 + (i % 4)}s" repeatCount="indefinite"/></g>`,
+          )
+          .join('')
+        return `<rect width="800" height="${SCENE_H}" fill="${bg}"/><ellipse cx="400" cy="30" rx="420" ry="10" fill="${b}" opacity="0.12"><animate attributeName="cx" values="360;440;360" dur="18s" repeatCount="indefinite"/></ellipse>${trigrams}${fish}`
+      }
+      case 'qi':
+        // Golden qi motes rising through a violet haze.
+        return `<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="${a}"/><stop offset="0.5" stop-color="${b}"/><stop offset="1" stop-color="${a}"/></linearGradient></defs><rect width="800" height="${SCENE_H}" fill="${bg}"/><rect width="800" height="${SCENE_H}" fill="url(#g)" opacity="0.25"><animate attributeName="opacity" values="0.15;0.35;0.15" dur="6s" repeatCount="indefinite"/></rect>${spots(28, 2)
+          .map(
+            ({ x, i }) =>
+              `<circle cx="${x}" r="${1 + (i % 3)}" fill="${i % 3 ? c : d}"><animate attributeName="cy" values="${SCENE_H + 4};-4" dur="${3 + (i % 5)}s" begin="-${i % 7}s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;0" dur="${3 + (i % 5)}s" begin="-${i % 7}s" repeatCount="indefinite"/></circle>`,
+          )
+          .join('')}`
+      case 'mist':
+        // Ink-wash peaks with cloud bands drifting across.
+        return `<rect width="800" height="${SCENE_H}" fill="${bg}"/><path d="M0 36 L60 14 L110 28 L180 6 L260 30 L330 12 L420 32 L500 8 L580 26 L660 10 L740 28 L800 16 L800 36Z" fill="${a}" opacity="0.8"/><path d="M0 36 L90 22 L170 32 L250 18 L350 34 L460 20 L560 34 L690 18 L800 30 L800 36Z" fill="${b}" opacity="0.7"/>${[0, 1, 2]
+          .map(
+            i =>
+              `<ellipse cy="${12 + i * 8}" rx="${120 + i * 40}" ry="4" fill="${d}" opacity="${0.25 - i * 0.05}"><animate attributeName="cx" values="-200;1000" dur="${20 + i * 9}s" begin="-${i * 7}s" repeatCount="indefinite"/></ellipse>`,
+          )
+          .join('')}`
+      case 'stars':
+        // A starry river: twinkling stars and a slow shooting star.
+        return `<rect width="800" height="${SCENE_H}" fill="${bg}"/><ellipse cx="400" cy="18" rx="380" ry="8" fill="${a}" opacity="0.18"/>${spots(40, 3)
+          .map(
+            ({ x, y, i }) =>
+              `<circle cx="${x}" cy="${y}" r="${i % 5 ? 0.8 : 1.5}" fill="${i % 4 ? b : d}"><animate attributeName="opacity" values="0.2;1;0.2" dur="${2 + (i % 4)}s" begin="-${i % 3}s" repeatCount="indefinite"/></circle>`,
+          )
+          .join('')}<line x1="0" y1="0" x2="30" y2="10" stroke="${d}" stroke-width="1.2" stroke-linecap="round"><animateTransform attributeName="transform" type="translate" values="-60 -10;860 30" dur="7s" repeatCount="indefinite"/></line>`
+    }
+  })()
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${SCENE_H}" viewBox="0 0 800 ${SCENE_H}" preserveAspectRatio="xMidYMid slice">${body}</svg>`
+  sceneCache.set(cacheKey, svg)
+  return svg
 }
 
 async function palette($: EngineInterface): Promise<Palette> {
@@ -2385,6 +2546,33 @@ const openTodo = ($: EngineInterface) => $.ui.open({ id: TODO_PANE, title: 'TODO
 const openNotes = ($: EngineInterface) => $.ui.open({ id: NOTES_PANE, title: 'Ghi chú' })
 const openCommit = ($: EngineInterface) => $.ui.open({ id: COMMIT_PANE, title: 'Commit' })
 const openContext = ($: EngineInterface) => $.ui.open({ id: CONTEXT_PANE, title: 'Context' })
+const openAccounts = ($: EngineInterface) => $.ui.open({ id: ACCOUNTS_PANE, title: 'Tài khoản Claude' })
+
+// ---- accounts: claude-swap's profiles. Every action goes through its /profile command,
+// so this mod never reads or writes a credential.
+const PROFILE_NAME = /^\w[\w.-]*$/
+
+// `note` replaces the pane's message; a failed reload keeps the last list.
+async function loadAccounts($: EngineInterface, note = '') {
+  const ran = await $.command.run({ command: 'profile', args: 'list --json' }).catch(() => null)
+  let list: Account[] | null = null
+  try {
+    const data = JSON.parse(ran?.text?.trim() ?? '') as { profiles: Account[] }
+    list = data.profiles.map(p => ({ name: p.name, email: p.email, active: p.active, disabled: p.disabled }))
+  } catch {
+    note ||= ran?.text?.trim() || 'Cần cài plugin claude-swap (lệnh /profile).'
+  }
+  await update($, accounts, a => ({ list: list ?? a?.list ?? [], note }))
+}
+
+async function accountRun($: EngineInterface, args: string) {
+  const ran = await $.command
+    .run({ command: 'profile', args })
+    .catch((err: unknown) => ({ text: `❌ ${err instanceof Error ? err.message : String(err)}` }))
+  const note = ran.text?.trim() ?? ''
+  await loadAccounts($, note)
+  return note
+}
 
 // ---- notices: the engine's toast (text only) with an icon, and a colored,
 // bordered card on the band for a few seconds.
@@ -2764,6 +2952,8 @@ async function helpText($: EngineInterface) {
     '  save <x>  lưu x thành một prompt nhanh',
     '  settings  tab cài đặt: bật/tắt nhanh mọi tính năng',
     `  theme <x> bảng màu: ${Object.keys(THEMES).join(' | ')}`,
+    '  clear     xoá nội dung đang gõ trong ô nhập',
+    '  accounts [x] tài khoản Claude (cần claude-swap): thêm, xoá, đổi nhanh; có x thì đổi sang x',
     '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
     '  find <x>  tìm x trong hội thoại này',
     'Công cụ:',
@@ -2807,7 +2997,7 @@ export const register: Register = on => {
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | theme | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
+          'settings | theme | accounts | clear | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
       })
     } catch {
       void notice($, 'terminal-polish: không đăng ký được /mods')
@@ -2943,6 +3133,10 @@ export const register: Register = on => {
         return { text: await quotaCommand($) }
       case 'undo':
         return { text: await undoCommand($, args.slice(word.length).trim()) }
+      case 'clear': {
+        const filled = await $.prompt.fill({ text: '', mode: 'replace' })
+        return { text: filled.isFilled ? 'Đã xoá nội dung ô nhập.' : 'Không xoá được ô nhập.' }
+      }
       case 'checkpoints':
         return { text: checkpointsText(await read($, checkpoints)) }
       case 'check':
@@ -2954,6 +3148,23 @@ export const register: Register = on => {
         const text = args.slice(word.length).trim()
         if (text) await addTodos($, [{ text, done: false }])
         return placed(await openTodo($), text ? `Đã thêm TODO: ${text}` : 'Đã mở bảng TODO.')
+      }
+      case 'account':
+      case 'accounts': {
+        // /profile can't run while this hook holds the turn (the host refuses it): defer past the return.
+        const name = args.slice(word.length).trim()
+        if (name) {
+          if (!PROFILE_NAME.test(name)) return { text: `Tên profile không hợp lệ: ${name}` }
+          $.clock.after(500, () =>
+            void accountRun($, `swap ${name}`)
+              .then(note => notice($, note || `Đã đổi sang ${name}`))
+              .catch(() => undefined),
+          )
+          return { text: `Đang đổi sang ${name}…` }
+        }
+        const opened = await openAccounts($)
+        $.clock.after(500, () => void loadAccounts($).catch(() => undefined))
+        return placed(opened, 'Đã mở bảng tài khoản.')
       }
       case 'notes':
       case 'note': {
@@ -3503,6 +3714,7 @@ export const register: Register = on => {
     }
     const Raster = 'Raster' in t ? t.Raster : undefined
     const Image = 'Image' in t ? t.Image : undefined
+    const Svg = 'Svg' in t ? t.Svg : undefined
     // One round trip for everything the band draws, not one per value.
     const [
       projectName,
@@ -3636,6 +3848,7 @@ export const register: Register = on => {
       ['prompts', 'Prompt', 'p', () => void openPrompts($)],
       ['settings', 'Cài đặt', 'c', () => void openSettings($)],
       ['sel', 'Chọn', 'v', () => void grabSelection($)],
+      ['clear', '🧹', 'x', () => void $.prompt.fill({ text: '', mode: 'replace' })],
       ['hide', 'Ẩn', 'h', () => void setSetting($, 'band', false)],
     ]
     const buttons = (
@@ -3740,9 +3953,12 @@ export const register: Register = on => {
       </Box>
     )
 
+    const scene = s.anim && Svg ? sceneSvg(P) : null
     const strip =
       effect && Raster ? (
         <Raster key="fx" columns={fxWidth} rows={1} cells={fxFrame(effect, fxTick, fxWidth, P)} />
+      ) : scene && Svg ? (
+        <Svg key="scene" source={scene} alt={`theme ${P.scene}`} height={SCENE_H} isInteractive />
       ) : null
 
     return (
@@ -4317,6 +4533,71 @@ export const register: Register = on => {
             }}
           />
         ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: ACCOUNTS_PANE }, async ($, e) => {
+    const P = await palette($)
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const Input = 'Input' in t ? t.Input : undefined
+    const acc = await read($, accounts)
+    if (!acc) return <Text color={P.muted}>Đang tải…</Text>
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        {acc.list.map((a, i) => (
+          <Box key={`acc-${a.name}`} flexDirection="row" gap={1}>
+            <Text color={a.active ? P.ok : P.muted}>{a.active ? '●' : '○'}</Text>
+            <Text color={a.disabled ? P.muted : P.accent} bold={a.active}>
+              {a.name}
+            </Text>
+            {a.email ? (
+              <Text color={P.muted} wrap="truncate-end">
+                {a.email}
+              </Text>
+            ) : null}
+            {!a.active && !a.disabled ? (
+              <Button
+                key={`acc-use-${i}`}
+                label="Đổi"
+                {...(i < 9 ? { hotkey: String(i + 1) } : {})}
+                onPress={() => void accountRun($, `swap ${a.name}`)}
+              />
+            ) : null}
+            {/* Deleting has no undo: it only fills the prompt, the person sends it. */}
+            <Button
+              key={`acc-del-${i}`}
+              label="✕"
+              dimColor
+              onPress={() => void $.prompt.fill({ text: `/profile delete ${a.name}`, mode: 'replace' })}
+            />
+          </Box>
+        ))}
+        {acc.note ? (
+          <Text color={P.warn} wrap="wrap">
+            {acc.note}
+          </Text>
+        ) : null}
+        <Text color={P.muted} wrap="wrap">
+          Thêm tài khoản: /login bằng tài khoản mới, rồi đặt tên bên dưới để lưu nó thành profile.
+        </Text>
+        {Input ? (
+          <Input
+            key="acc-new"
+            placeholder="Tên profile mới…"
+            submitLabel="Lưu tài khoản đang đăng nhập"
+            onSubmit={text => {
+              const name = text.trim()
+              if (PROFILE_NAME.test(name)) void accountRun($, `new ${name}`)
+              else void update($, accounts, a => (a ? { ...a, note: `Tên profile không hợp lệ: ${name}` } : a))
+            }}
+          />
+        ) : null}
+        <Box flexDirection="row" gap={1}>
+          <Button key="acc-refresh" label="Làm mới" hotkey="r" onPress={() => void loadAccounts($)} />
+        </Box>
       </Box>
     )
   })
