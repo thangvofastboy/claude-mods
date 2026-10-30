@@ -414,3 +414,26 @@ test('the band has a clear icon that empties the prompt box', async ($, on) => {
   expect(fills).toEqual([''])
   await ui.unmount()
 })
+
+test('the band account button opens the accounts pane with the profiles loaded', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  const opened: string[] = []
+  on('ui.open', (_$, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } } as never
+  })
+  on('command.run', { command: 'profile' }, () => ({
+    text: JSON.stringify({ active: 'work', profiles: [{ name: 'work', active: true, email: null, tags: [], disabled: false }] }),
+  }))
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  })
+  await ui.press({ key: 'accounts' })
+  expect(opened).toContain('terminal-polish-accounts')
+  expect((await ui.find({ key: 'accounts' }))?.text).toContain('👤work')
+  await ui.unmount()
+})

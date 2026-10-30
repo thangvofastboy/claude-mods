@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-73%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-75%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-17-5b8def?style=for-the-badge)
 
@@ -92,7 +92,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ✂️ | **Đoạn bôi đen** | Giải thích, dịch Việt ⇄ Anh, tóm tắt, hoặc copy sạch đoạn bạn vừa bôi đen. |
 | 🔎 | **Tìm kiếm** | Tìm trong hội thoại hiện tại, kèm đoạn văn xung quanh chỗ tìm thấy. |
 | ⚙️ | **Cài đặt** | Bật/tắt mọi tính năng và chọn theme. |
-| 👤 | **Tài khoản Claude** | `/mods accounts` mở bảng các profile của claude-swap: bấm **Đổi** (phím 1-9) để chuyển tài khoản, nhập tên để lưu tài khoản vừa `/login`, ✕ điền sẵn lệnh xoá để bạn tự gửi. Mọi thao tác đi qua `/profile`, mod không đụng tới token. |
+| 👤 | **Tài khoản Claude** | Nút `👤<tên>` trên dải trạng thái (phím `a`) hoặc `/mods accounts` mở bảng các profile của claude-swap: bấm **Đổi** (phím 1-9) để chuyển tài khoản, nhập tên để lưu tài khoản vừa `/login`, ✕ điền sẵn lệnh xoá để bạn tự gửi. Mọi thao tác đi qua `/profile`, mod không đụng tới token. |
 
 ### 🛡️ An toàn
 

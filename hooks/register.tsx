@@ -3735,6 +3735,7 @@ export const register: Register = on => {
       subs,
       failing,
       effortPick,
+      acc,
     ] = await Promise.all([
       read($, project),
       read($, git),
@@ -3754,6 +3755,7 @@ export const register: Register = on => {
       read($, agents),
       read($, testFail),
       read($, autoEffort),
+      read($, accounts),
     ])
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
@@ -3848,6 +3850,12 @@ export const register: Register = on => {
       ['prompts', 'Prompt', 'p', () => void openPrompts($)],
       ['settings', 'Cài đặt', 'c', () => void openSettings($)],
       ['sel', 'Chọn', 'v', () => void grabSelection($)],
+      [
+        'accounts',
+        `👤${acc?.list.find(a => a.active)?.name ?? ''}`,
+        'a',
+        () => void openAccounts($).then(() => loadAccounts($)).catch(() => undefined),
+      ],
       ['clear', '🧹', 'x', () => void $.prompt.fill({ text: '', mode: 'replace' })],
       ['hide', 'Ẩn', 'h', () => void setSetting($, 'band', false)],
     ]
