@@ -45,6 +45,8 @@ const STATS_DAYS = 60
 const POLL_MS = 3000
 const TOAST_SECONDS = 60
 const NOTIFY_SECONDS = 20
+// A turn that runs this long gets one reminder (under the notify setting).
+const LONG_TURN_MS = 5 * 60_000
 const TLDR_MIN_CHARS = 1200
 const REPO = 'git@github.com:thangvofastboy/claude-mods.git'
 const MARKETPLACE = 'claude-mods'
@@ -108,7 +110,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   cards: 'ngoặc bo tròn bên trái tin nhắn của bạn (khi tắt `frame`)',
   frame: 'khung bo tròn bao quanh tin nhắn của bạn, dễ nhận ra hơn ngoặc bên trái',
   tldr: 'TL;DR dưới câu trả lời dài (tốn thêm token haiku)',
-  notify: 'báo khi lượt dài xong (thẻ trên dải trạng thái và thông báo hệ điều hành)',
+  notify: 'báo khi lượt dài xong (thẻ trên dải trạng thái và thông báo hệ điều hành), và nhắc một lần khi lượt chạy quá 5 phút',
   sound: 'âm thanh khi lượt dài xong',
   voice: 'đọc to khi lượt dài xong',
   guard: 'lệnh nguy hiểm và sửa/ghi file bí mật: hỏi bạn trong hộp thoại quyền trước khi chạy, không có ai để hỏi thì chặn',
@@ -149,7 +151,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
   autoupdate: 'tự cập nhật plugin lên tag mới nhất khi mở Claude (kiểm tra tối đa 6 giờ một lần, chỉ bản cài từ marketplace)',
-  msgactions: 'nút Sao chép và Huỷ (lượt đang chạy) dưới tin nhắn bạn đã gửi',
+  msgactions: 'icon dưới tin nhắn bạn đã gửi: ⧉ sao chép, ★ lưu vào Prompt nhanh, ↻ gửi lại khi lượt lỗi, ✎ sửa và ■ huỷ (lượt đang chạy); nút sao chép từng code block dưới câu trả lời',
   asknotify: 'báo khi Claude hỏi bạn (AskUserQuestion), để bạn làm việc khác',
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
@@ -195,6 +197,8 @@ const project = atom({ plugin: 'terminal-polish', key: 'project' } as const, '')
 const git = atom({ plugin: 'terminal-polish', key: 'git' } as const, null)
 const turn = atom({ plugin: 'terminal-polish', key: 'turn' } as const, null)
 const liveTurn = atom({ plugin: 'terminal-polish', key: 'liveTurn' } as const, null)
+// The prompt of the last turn that ended in an API error, for the ↻ resend button.
+const failed = atom({ plugin: 'terminal-polish', key: 'failed' } as const, null)
 const last = atom({ plugin: 'terminal-polish', key: 'last' } as const, null)
 const history = atom({ plugin: 'terminal-polish', key: 'history' } as const, [])
 const usage = atom({ plugin: 'terminal-polish', key: 'usage' } as const, null)
@@ -708,6 +712,10 @@ export function prDraft(log: string, stat: string) {
   ].join('\n')
 }
 
+// Fenced code blocks of a reply, in order: the language tag (may be empty) and the body.
+export const codeBlocks = (text: string) =>
+  [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map(m => ({ lang: (m[1] ?? '').trim(), code: (m[2] ?? '').replace(/\n$/, '') }))
+
 export const pinText = (answer: string) => {
   const t = answer.trim()
   return t.length > PIN_MAX ? `${t.slice(0, PIN_MAX)}…` : t
@@ -725,10 +733,24 @@ export function outputOf(result: unknown) {
 
 // The band's failing-test name as last written, so a passing run does not rewrite null.
 let lastFail: string | null = null
+// The long-turn reminder of the running turn; cancelled when it ends.
+let longTimer: Timer | null = null
 
 async function copyText($: EngineInterface, text: string) {
   const copied = await $.ui.copy({ text }).catch(() => undefined)
   void notice($, copied?.isCopied ? '✅ Đã sao chép' : '❌ Không sao chép được')
+}
+
+async function savePrompt($: EngineInterface, text: string) {
+  await setPrompts($, list => [...list.filter(p => p !== text), text].slice(-30))
+  void notice($, 'Đã lưu vào Prompt nhanh')
+}
+
+async function longTurn($: EngineInterface) {
+  const s = await read($, settings)
+  void notice($, `⏳ Lượt này đã chạy ${LONG_TURN_MS / 60_000} phút, Claude vẫn đang làm.`)
+  const muted = s.quiet && inQuiet(new Date(await $.clock.now()).getHours())
+  if (!muted) void $.ui.notify('Lượt vẫn đang chạy', { title: (await read($, project)) || 'Claude' }).catch(() => undefined)
 }
 
 // The sessions list and the subagent rows are only drawn in their panes: poll
@@ -1842,6 +1864,26 @@ async function prCommand($: EngineInterface) {
   return prDraft(log.stdout, stat.stdout)
 }
 
+// The session as Markdown: each message under its speaker, then the files Claude changed.
+async function exportCommand($: EngineInterface) {
+  const dir = await read($, home)
+  if (!dir) return 'Chưa xác định được thư mục nhà để xuất.'
+  const messages = (await $.session.messages()).filter(m => m.text.trim())
+  if (!messages.length) return 'Chưa có tin nhắn nào để xuất.'
+  const now = await $.clock.now()
+  const d = new Date(now)
+  const path = `${dir}/.claude/mods-export-${localDay(now)}-${pad2(d.getHours())}${pad2(d.getMinutes())}.md`
+  const touched = await read($, files)
+  const doc = [
+    `# ${(await read($, project)) || 'Phiên làm việc'} · ${localDay(now)}`,
+    '',
+    ...(touched.length ? ['## File đã sửa', ...touched.map(f => `- ${f}`), ''] : []),
+    ...messages.flatMap(m => [`## ${m.role === 'user' ? 'Bạn' : 'Claude'}`, '', m.text.trim(), '']),
+  ].join('\n')
+  await $.fs.write(path, doc)
+  return `Đã xuất ${messages.length} tin nhắn: ${path}`
+}
+
 async function pinCommand($: EngineInterface) {
   const answer = await read($, lastAnswer)
   if (!answer) return 'Chưa có câu trả lời nào để ghim.'
@@ -2707,6 +2749,7 @@ async function helpText($: EngineInterface) {
     '  history <x>        tìm x trong prompt của mọi session trong dự án này',
     '  pr                 soạn mô tả PR từ commit và file so với main',
     '  pin                ghim câu trả lời gần nhất vào ghi chú',
+    '  export             xuất hội thoại ra file Markdown trong thư mục nhà',
     '  quota              mức dùng 5h/7d và giờ reset',
     '  undo [file] · checkpoints   hoàn tác lần sửa file gần nhất của Claude',
     '  check "<lệnh>"|run|off      lệnh kiểm tra của dự án',
@@ -2871,6 +2914,8 @@ export const register: Register = on => {
         return { text: await prCommand($) }
       case 'pin':
         return { text: await pinCommand($) }
+      case 'export':
+        return { text: await exportCommand($) }
       case 'quota':
         return { text: await quotaCommand($) }
       case 'undo':
@@ -2974,12 +3019,18 @@ export const register: Register = on => {
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
     const [, , effect, s] = await Promise.all([
-      Promise.all([update($, turn, () => value), update($, liveTurn, () => ({ id: e.turnId, text: e.text }))]),
+      Promise.all([
+        update($, turn, () => value),
+        update($, liveTurn, () => ({ id: e.turnId, text: e.text })),
+        update($, failed, () => null),
+      ]),
       Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       read($, fx),
       read($, settings),
     ])
     if (s.splashhide) await update($, splash, () => false)
+    longTimer?.cancel()
+    longTimer = s.notify ? $.clock.after(LONG_TURN_MS, () => void longTurn($)) : null
     if (effect !== 'party') void startFx($, 'comet')
     if (s.automodel && e.text.trim()) {
       try {
@@ -3282,7 +3333,9 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     const ran = await next(e)
-    const [s, t] = await Promise.all([read($, settings), read($, turn)])
+    const [s, t, live] = await Promise.all([read($, settings), read($, turn), read($, liveTurn)])
+    longTimer?.cancel()
+    longTimer = null
     // Asked first, so Haiku answers while the bookkeeping below runs, not after it.
     const tldr =
       s.tldr && e.reason === 'answer' && !e.isAborted && e.answer.length >= TLDR_MIN_CHARS
@@ -3306,6 +3359,7 @@ export const register: Register = on => {
     }
     try {
       await Promise.all([
+        e.reason === 'error' && live ? update($, failed, () => ({ text: live.text })) : undefined,
         update($, last, () => done),
         update($, history, list => [...list, done].slice(-20)),
         Promise.all([update($, turn, () => null), update($, liveTurn, () => null)]),
@@ -4572,27 +4626,54 @@ export const register: Register = on => {
       </Box>
     )
 
-    // Cancel shows on the running turn's own prompt only.
-    // ponytail: matched by text, so an identical earlier prompt shows it too; key on a row id if one appears.
-    const live = s.msgactions ? await read($, liveTurn) : null
+    // Cancel and edit show on the running turn's own prompt only; edit while the turn has not edited a file yet.
+    // ponytail: matched by text, so an identical earlier prompt shows them too; key on a row id if one appears.
+    const [live, work] = s.msgactions ? await Promise.all([read($, liveTurn), read($, turn)]) : [null, null]
+    const lost = s.msgactions ? await read($, failed) : null
     const liveId = live && live.text === e.props.text ? live.id : undefined
+    const icon = (glyph: string, color: string) => <Text color={color}>{glyph}</Text>
     const actions = s.msgactions ? (
       <Box flexDirection="row" gap={2} marginLeft={bracket ? 4 : 2}>
-        <Button
-          key={`copy-${e.requestId}`}
-          label="⧉ Sao chép"
-          plain
-          dimColor
-          onPress={() => void copyText($, e.props.text)}
-        />
+        <Button key={`copy-${e.requestId}`} label="Sao chép" plain onPress={() => void copyText($, e.props.text)}>
+          {icon('⧉', P.cyan)}
+        </Button>
+        <Button key={`save-${e.requestId}`} label="Lưu" plain onPress={() => void savePrompt($, e.props.text)}>
+          {icon('★', P.ok)}
+        </Button>
+        {lost?.text === e.props.text && !liveId ? (
+          <Button
+            key={`retry-${e.requestId}`}
+            label="Gửi lại"
+            plain
+            onPress={() => void $.prompt.submit({ text: e.props.text })}
+          >
+            {icon('↻', P.info)}
+          </Button>
+        ) : null}
+        {liveId && !work?.edits ? (
+          <Button
+            key={`edit-${e.requestId}`}
+            label="Sửa"
+            plain
+            onPress={() =>
+              void $.turn
+                .abort({ turnId: liveId })
+                .catch(() => undefined)
+                .then(() => $.prompt.fill({ text: e.props.text, mode: 'replace' }))
+            }
+          >
+            {icon('✎', P.warn)}
+          </Button>
+        ) : null}
         {liveId ? (
           <Button
             key={`abort-${e.requestId}`}
-            label="■ Huỷ"
+            label="Huỷ"
             plain
-            dimColor
             onPress={() => void $.turn.abort({ turnId: liveId }).catch(() => undefined)}
-          />
+          >
+            {icon('■', P.err)}
+          </Button>
         ) : null}
       </Box>
     ) : null
@@ -4605,6 +4686,33 @@ export const register: Register = on => {
         {row}
         {thumbs}
         {actions}
+      </Box>
+    )
+  })
+
+  // Each fenced code block of a reply gets a copy button under the reply.
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const s = await read($, settings)
+    const blocks = s.msgactions && !e.props.isSummary ? codeBlocks(e.props.text) : []
+    if (!blocks.length) return next(e)
+    const [P] = await look($)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        {await next(e)}
+        <Box flexDirection="row" gap={2} marginLeft={2}>
+          {blocks.map((b, i) => (
+            <Button
+              key={`code-${i}`}
+              label={`Sao chép code ${b.lang || i + 1}`}
+              plain
+              dimColor
+              onPress={() => void copyText($, b.code)}
+            >
+              <Text color={P.cyan}>⧉</Text>
+            </Button>
+          ))}
+        </Box>
       </Box>
     )
   })

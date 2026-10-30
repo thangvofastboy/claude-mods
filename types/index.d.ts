@@ -90,6 +90,7 @@ declare module 'claude-code' {
       turn: Turn | null
       // The main loop's running turn, for the cancel button under its prompt.
       liveTurn: { id: string; text: string } | null
+      failed: { text: string } | null
       last: LastTurn | null
       history: LastTurn[]
       usage: Usage | null

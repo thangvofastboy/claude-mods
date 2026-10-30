@@ -63,10 +63,11 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
 | 🤖 | **Đếm agent** | Khi có subagent đang chạy, dải trạng thái hiện `🤖 2 chạy · 5/8 xong`. |
-| 📋 | **Nút dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có **⧉ Sao chép**; tin của lượt đang chạy có thêm **■ Huỷ** để dừng lượt đó. Tắt: `/mods msgactions`. |
+| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có icon ⧉ (sao chép) và ★ (lưu vào Prompt nhanh); lượt lỗi có thêm ↻ (gửi lại); tin của lượt đang chạy có thêm ✎ (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và ■ (huỷ lượt). Dưới mỗi câu trả lời có nút sao chép cho từng khối code. Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
 | 🧭 | **Lịch sử prompt** | `/mods history <x>` tìm x trong prompt của session này và tối đa 8 session gần đây trong dự án (không đảm bảo đúng thứ tự mới nhất). |
 | 🧾 | **Soạn mô tả PR** | `/mods pr` soạn sẵn mô tả PR từ các commit và file thay đổi so với `main` (hoặc `master`). |
 | 📌 | **Ghim câu trả lời** | `/mods pin` ghim câu trả lời gần nhất của Claude vào ghi chú dự án. |
+| 📤 | **Xuất hội thoại** | `/mods export` ghi toàn bộ hội thoại ra file Markdown trong thư mục nhà, kèm danh sách file đã sửa. |
 | 📊 | **Quota và giờ reset** | `/mods quota` cho biết mức dùng 5h/7d và còn bao lâu nữa reset. Từ 90% có cảnh báo, mỗi cửa sổ chỉ báo một lần. |
 | ✗ | **Test lỗi trên dải trạng thái** | Sau lệnh test thất bại, dải trạng thái hiện tên test lỗi đầu tiên. Tắt: `/mods testfail`. |
 | 🧪 | **Test liên quan khi sửa file** | Bật `relatedtest`: sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest). Mặc định tắt vì tốn thời gian. |
@@ -112,7 +113,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | 💵 | **Thống kê** | `/mods stats`: lượt, thời gian, tool, chi phí theo ngày và theo dự án. |
 | 🗜️ | **Compact thông minh** | Nhắc `/compact` khi context từ 85% (hoặc tự compact); bản tóm tắt được dặn giữ file đã sửa, luật dự án và TODO đang mở. |
 | 📝 | **TL;DR** | Câu trả lời dài được Haiku tóm tắt 1–2 câu ngay bên dưới. |
-| 🔔 | **Báo khi xong** | Thông báo hệ điều hành khi lượt chạy từ 20 giây trở lên; tùy chọn âm thanh và đọc to. |
+| 🔔 | **Báo khi xong** | Thông báo hệ điều hành khi lượt chạy từ 20 giây trở lên; tùy chọn âm thanh và đọc to. Lượt chạy quá 5 phút được nhắc một lần. |
 | ⌨️ | **Từ viết tắt** | `/mods abbrev ;fix Sửa lỗi này và chạy lại test`, rồi gõ `;fix` trong prompt là tự bung ra. |
 | 📏 | **Luật dự án** | `/mods rule luôn dùng pnpm`: tự thêm vào system prompt của dự án đó. |
 | ✅ | **Tự kiểm tra** | `/mods check "pnpm test"`; bật `autocheck` để tự chạy sau mỗi lượt có sửa file. |

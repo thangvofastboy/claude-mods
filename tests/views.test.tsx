@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { codeBlocks } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -273,5 +274,44 @@ test('a prompt in a frame has no bracket glyphs and keeps its text', async ($, o
   expect(await ui.findAll({ type: 'Text', text: /^[╭│╰] $/ })).toEqual([])
   expect(await ui.find({ type: 'Text', text: /một/ })).toBeDefined()
   expect((await ui.findAll({ type: 'Box' })).some(b => b.props.borderStyle === 'round')).toBe(true)
+  await ui.unmount()
+})
+
+// Message actions are colored icons only; the words stay as the buttons' names.
+test('a sent prompt shows the copy icon without its label text', async ($, on) => {
+  mock.store(on)
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'UserMessage',
+    requestId: 'r1',
+    props: { text: 'xin chào', origin: { kind: 'composer' }, isExpanded: false },
+  })
+  expect((await ui.find({ key: 'copy-r1' }))?.text).toBe('⧉')
+  expect((await ui.find({ key: 'save-r1' }))?.text).toBe('★')
+  expect(await ui.findAll({ type: 'Text', text: /Sao chép/ })).toEqual([])
+  await ui.unmount()
+})
+
+test('each fenced block of a reply gets its own copy button', async ($, on) => {
+  mock.store(on)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine reply</Text>
+  })
+  const text = 'Chạy này:\n```ts\nconst a = 1\n```\nrồi này:\n```\nls\n```'
+  expect(codeBlocks(text)).toEqual([
+    { lang: 'ts', code: 'const a = 1' },
+    { lang: '', code: 'ls' },
+  ])
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'AssistantMessage',
+    requestId: 'a1',
+    props: { text, isFirstOfReply: true },
+  })
+  expect(await ui.find({ key: 'code-0' })).toBeDefined()
+  expect(await ui.find({ key: 'code-1' })).toBeDefined()
   await ui.unmount()
 })
