@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-75%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-82%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-17-5b8def?style=for-the-badge)
 
@@ -63,7 +63,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
 | 🤖 | **Đếm agent** | Khi có subagent đang chạy, dải trạng thái hiện `🤖 2 chạy · 5/8 xong`. |
-| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có icon 📋 (sao chép) và ⭐ (lưu vào Prompt nhanh); lượt lỗi có thêm 🔄 (gửi lại); tin của lượt đang chạy có thêm 📝 (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và 🛑 (huỷ lượt). Dưới mỗi câu trả lời có nút sao chép cho từng khối code, và nút 🔗 cho mỗi link (mở trong trình duyệt) hay file trong `backtick` (mở bằng ứng dụng mặc định). Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
+| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có `📋 Copy` và `⭐ Save` (lưu vào Prompt nhanh); lượt lỗi có thêm `🔄 Retry` (gửi lại); tin của lượt đang chạy có thêm `📝 Edit` (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và `🛑 Stop` (huỷ lượt). Dưới mỗi câu trả lời có nút `📋 Copy` cho từng khối code, và nút `🔗 Open` cho mỗi link (mở trong trình duyệt) hay file trong `backtick` (mở bằng ứng dụng mặc định). Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
 | 🧭 | **Lịch sử prompt** | `/mods history <x>` tìm x trong prompt của session này và tối đa 8 session gần đây trong dự án (không đảm bảo đúng thứ tự mới nhất). |
 | 🧾 | **Soạn mô tả PR** | `/mods pr` soạn sẵn mô tả PR từ các commit và file thay đổi so với `main` (hoặc `master`). |
 | 📌 | **Ghim câu trả lời** | `/mods pin` ghim câu trả lời gần nhất của Claude vào ghi chú dự án. |
@@ -92,7 +92,7 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ✂️ | **Đoạn bôi đen** | Giải thích, dịch Việt ⇄ Anh, tóm tắt, hoặc copy sạch đoạn bạn vừa bôi đen. |
 | 🔎 | **Tìm kiếm** | Tìm trong hội thoại hiện tại, kèm đoạn văn xung quanh chỗ tìm thấy. |
 | ⚙️ | **Cài đặt** | Bật/tắt mọi tính năng và chọn theme. |
-| 👤 | **Tài khoản Claude** | Nút `👤<tên>` trên dải trạng thái (phím `a`) hoặc `/mods accounts` mở bảng các profile của claude-swap: bấm **Đổi** (phím 1-9) để chuyển tài khoản, nhập tên để lưu tài khoản vừa `/login`, ✕ điền sẵn lệnh xoá để bạn tự gửi. Mọi thao tác đi qua `/profile`, mod không đụng tới token. |
+| 👤 | **Tài khoản Claude** | Nút `👤 <tên>` trên dải trạng thái (phím `a`) hoặc `/mods accounts` mở bảng các profile của claude-swap: bấm **Đổi** (phím 1-9) để chuyển tài khoản, nhập tên để lưu tài khoản vừa `/login`, ✕ điền sẵn lệnh xoá để bạn tự gửi. Mọi thao tác đi qua `/profile`, mod không đụng tới token. |
 
 ### 🛡️ An toàn
 
@@ -100,6 +100,12 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | :-: | --- | --- |
 | 🛑 | **Chặn lệnh nguy hiểm** | `rm -rf` lên `/`, `~`, `$HOME` (cả dạng `~/*`, `"$HOME"`, `-r -f`), force-push lên `main`/`master` (cả `-fu`, `+main`; vẫn cho `--force-with-lease`), `mkfs`, `dd of=/dev/…`, `chmod -R 777 /`, sửa `.env`, `*.pem`, `id_rsa*`. Áp dụng cho cả tool **Bash** lẫn **Monitor**. |
 | 💥 | **Xem trước lệnh rủi ro** | `rm -r`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore .` và force-push bị **giữ lại**: dải trạng thái liệt kê những gì sẽ mất (file và dung lượng sẽ xóa, file chưa commit, commit sẽ bị bỏ) rồi chờ bạn bấm **1** Chạy hoặc **2** Hủy (Enter = Hủy). Không ai trả lời sau 10 phút thì lệnh không chạy. Chỉ đo bằng lệnh đọc, không bao giờ chạy thử lệnh; đường dẫn có biến (`$DIR`), lệnh có `cd` trước hay remote là URL thì báo *không đo được* thay vì đoán. Áp dụng cho cả tool **Bash** lẫn **Monitor**; một lệnh có nhiều phần rủi ro (`rm -r a; git reset --hard`) thì thẻ liệt kê đủ từng phần. Lệnh của subagent có nhãn `[subagent]`, nhiều lệnh cùng lúc thì lần lượt từng cái. Phím 1/2 dùng khi ô prompt trống, không thì bấm chuột. Tắt: `/mods blast`. |
+| ▶ | **Replay** | Sau một lượt có sửa file, dải trạng thái hiện `▶ Replay N` (phím `r`) hoặc gõ `/mods replay`: bảng xem lại từng lần sửa, mỗi bước một diff (tối đa 12 dòng, 1 dòng ngữ cảnh), thanh số bước, `◀ Prev` (p) · `Next ▶` (n) · `💡 Explain` (e, hỏi Claude vì sao sửa vậy) · `✕ Close` (c). Chỉ ghi lần sửa thành công; lượt không sửa file giữ replay cũ. |
+| 🤖 | **AI monitor** | Nút `🤖 Monitor` trên dải trạng thái (phím `g`) hoặc `/mods monitor`: mỗi agent (và lượt chính) một dòng gồm trạng thái, model, effort, thời gian chạy, số lần gọi model, context hiện tại, token in/out/cache và **≈ tiền**. Tiền từng agent là ước tính theo bảng giá công khai; tổng thật của session hiện kế bên. |
+| 🧐 | **Nhắc prompt mơ hồ** | Prompt ngắn chỉ nói "nó", "cái này", "fix it"… mà không nêu file, đường dẫn hay mục tiêu thì hiện lời nhắc (không chặn gửi). Tắt: `/mods promptlint`. |
+| 🕰️ | **Commit nháp theo lượt** | Bật `/mods shadow`: sau mỗi lượt có sửa file, lưu một commit vào `refs/mods/turns` bằng index tạm trong `.git`, không đụng nhánh, index hay HEAD. `/mods turns` liệt kê và chỉ cách xem/lấy lại file. Mặc định tắt. |
+| 📣 | **Gửi cho mọi session** | Trong bảng Sessions, ô *Gửi cho mọi session đang rảnh* gửi một tin cho tất cả session không bận. |
+| 📰 | **Changelog hôm nay** | `/mods changelog` gom commit hôm nay thành Tính năng / Sửa lỗi / Khác và copy; `/mods changelog write` ghi lên đầu `CHANGELOG.md`. |
 | 🔐 | **Quét secret** | Prompt có API key (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe), JWT, private key hay `password=…` sẽ bị giữ lại. Gửi lại với **`>>`** ở đầu nếu chắc chắn. |
 | ↩️ | **Checkpoint & hoàn tác** | Bản cũ của file được lưu trước mỗi lần Claude sửa; `/mods undo` để khôi phục. |
 | 🌿 | **Khóa nhánh** | *(tùy chọn)* chặn commit/push thẳng lên `main`, `master`, `production`. |
@@ -147,6 +153,10 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | `/mods settings` | ⚙️ Tab cài đặt |
 | `/mods theme <tên>` | 🎨 Đổi bảng màu |
 | `/mods clear` | 🧹 Xoá nội dung đang gõ trong ô nhập |
+| `/mods replay` | ▶ Xem lại từng file Claude sửa ở lượt vừa xong |
+| `/mods monitor` | 🤖 AI monitor: agent, model, effort, thời gian, context, token, ≈ tiền |
+| `/mods turns` | 🕰️ Commit nháp theo lượt (cần `/mods shadow`) |
+| `/mods changelog [write]` | 📰 Changelog hôm nay từ commit |
 | `/mods accounts [tên]` | 👤 Bảng tài khoản Claude: thêm, xoá, đổi nhanh (cần [claude-swap](https://github.com/thangvofastboy/claude-swap)); có `tên` thì đổi luôn |
 | `/mods sessions` | 🗂️ Các session đang chạy |
 | `/mods dash` | 📈 Bảng hoạt động |

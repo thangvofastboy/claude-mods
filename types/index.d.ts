@@ -50,6 +50,8 @@ export type Settings = {
   quotaalert: boolean
   testfail: boolean
   relatedtest: boolean
+  promptlint: boolean
+  shadow: boolean
 }
 export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number; edits: number }
@@ -78,6 +80,24 @@ export type Category = { name: string; tokens: number; color: string }
 export type Breakdown = { categories: Category[]; total: number; max: number }
 export type Notice = { id: number; icon: string; kind: 'ok' | 'err' | 'warn' | 'info' | 'pink'; text: string }
 export type SplashInfo = { greeting: string; last: string; tip: string; forecast?: string }
+// One file edit of a turn, for the replay pane: a unified-style diff of the change.
+export type Step = { path: string; tool: string; diff: string; added: number; removed: number }
+// What one agent loop (or the main one, id 'main') has used, summed over its model responses.
+export type AgentStat = {
+  id: string
+  model: string
+  effort: string
+  startedAt: number
+  lastAt: number
+  steps: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  // The last response's whole prompt: its context window fill.
+  context: number
+  usd: number
+}
 // A claude-swap profile as `/profile list --json` gives it.
 export type Account = { name: string; email: string | null; active: boolean; disabled: boolean }
 // A risky shell command held until the person runs or cancels it, and what it would change.
@@ -139,6 +159,11 @@ declare module 'claude-code' {
       quotaWarned: string
       // null until the accounts pane first loads.
       accounts: { list: Account[]; note: string } | null
+      // The last turn that edited files, and the step the replay pane shows.
+      replay: Step[]
+      replayCount: number
+      agentStats: AgentStat[]
+      replayAt: number
     }
   }
 }

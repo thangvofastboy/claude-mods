@@ -4,6 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type {
   Account,
   Agent,
+  AgentStat,
   Blast,
   Breakdown,
   Call,
@@ -19,6 +20,7 @@ import type {
   Peer,
   Settings,
   SplashInfo,
+  Step,
   TimerState,
   Todo,
   Turn,
@@ -37,6 +39,8 @@ const NOTES_PANE = 'terminal-polish-notes'
 const COMMIT_PANE = 'terminal-polish-commit'
 const CONTEXT_PANE = 'terminal-polish-context'
 const ACCOUNTS_PANE = 'terminal-polish-accounts'
+const REPLAY_PANE = 'terminal-polish-replay'
+const MONITOR_PANE = 'terminal-polish-monitor'
 // Not `!`: a leading `!` in the composer runs a shell command and never reaches prompt.submit.
 const BYPASS = '>>'
 const MAX_CHECKPOINTS = 50
@@ -106,6 +110,8 @@ const DEFAULTS: Settings = {
   quotaalert: true,
   testfail: true,
   relatedtest: false,
+  promptlint: true,
+  shadow: false,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -159,6 +165,8 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
+  promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
+  shadow: 'sau mỗi lượt có sửa file, lưu một commit nháp vào refs/mods/turns (không đụng nhánh, index hay HEAD); xem bằng /mods turns',
 }
 const isSettingKey = (word: string): word is keyof Settings => word in DEFAULTS
 // The settings tab's groups; anything not listed falls into "Khác".
@@ -186,8 +194,8 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
     'notices',
   ],
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
-  'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock'],
-  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'relatedtest'],
+  'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock', 'shadow'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'relatedtest', 'promptlint'],
   'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
@@ -235,6 +243,10 @@ const checkpoints = atom({ plugin: 'terminal-polish', key: 'checkpoints' } as co
 const todos = atom({ plugin: 'terminal-polish', key: 'todos' } as const, [])
 const notes = atom({ plugin: 'terminal-polish', key: 'notes' } as const, [])
 const accounts = atom({ plugin: 'terminal-polish', key: 'accounts' } as const, null)
+const replay = atom({ plugin: 'terminal-polish', key: 'replay' } as const, [])
+const replayCount = atom({ plugin: 'terminal-polish', key: 'replayCount' } as const, 0)
+const agentStats = atom({ plugin: 'terminal-polish', key: 'agentStats' } as const, [])
+const replayAt = atom({ plugin: 'terminal-polish', key: 'replayAt' } as const, 0)
 const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
 const check = atom({ plugin: 'terminal-polish', key: 'check' } as const, null)
 const checkCommand = atom({ plugin: 'terminal-polish', key: 'checkCommand' } as const, '')
@@ -2546,6 +2558,198 @@ const openTodo = ($: EngineInterface) => $.ui.open({ id: TODO_PANE, title: 'TODO
 const openNotes = ($: EngineInterface) => $.ui.open({ id: NOTES_PANE, title: 'Ghi chú' })
 const openCommit = ($: EngineInterface) => $.ui.open({ id: COMMIT_PANE, title: 'Commit' })
 const openContext = ($: EngineInterface) => $.ui.open({ id: CONTEXT_PANE, title: 'Context' })
+const openReplay = async ($: EngineInterface) => {
+  await update($, replayAt, () => 0)
+  return $.ui.open({ id: REPLAY_PANE, title: 'Replay' })
+}
+
+// ---- replay: each successful edit of the running turn becomes a step; the
+// turn's end publishes them, so a turn without edits keeps the last replay.
+let turnSteps: Step[] = []
+const REPLAY_LINES = 12
+const MAX_STEPS = 100
+
+// The changed lines of before → after, one line of context around each run,
+// capped at REPLAY_LINES. Lines are matched by position after trimming the
+// common head and tail, which is what an Edit's old/new strings are anyway.
+export function editDiff(before: string, after: string): Omit<Step, 'path' | 'tool'> {
+  const a = before === '' ? [] : before.split('\n')
+  const b = after === '' ? [] : after.split('\n')
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+  const removed = a.slice(head, a.length - tail)
+  const added = b.slice(head, b.length - tail)
+  const lines = [
+    ...(head > 1 ? ['⋯'] : []),
+    ...(head > 0 ? [` ${a[head - 1]}`] : []),
+    ...removed.map(l => `-${l}`),
+    ...added.map(l => `+${l}`),
+    ...(tail > 0 ? [` ${a[a.length - tail]}`] : []),
+    ...(tail > 1 ? ['⋯'] : []),
+  ]
+  const shown = lines.slice(0, REPLAY_LINES)
+  if (lines.length > REPLAY_LINES) shown.push(`… ${lines.length - REPLAY_LINES} dòng nữa`)
+  return { diff: shown.join('\n'), added: added.length, removed: removed.length }
+}
+
+// ---- prompt lint: a short prompt that points ("it", "cái này") at nothing named.
+const VAGUE = /\b(this|that|it)\b|cái này|cái đó|chỗ này|chỗ đó|(^|\s)nó(\s|$)/i
+export function vagueHint(text: string): string | null {
+  const t = text.trim()
+  if (!t || t.startsWith('/') || t.length >= 40 || !VAGUE.test(t)) return null
+  // A file, a path, code or a number names the target well enough.
+  if (/[`/\\]|\.\w{1,5}\b|\d/.test(t)) return null
+  return '💡 Prompt hơi mơ hồ: nêu tên file, hành vi mong muốn hoặc lỗi cụ thể để Claude làm đúng ngay.'
+}
+
+// ---- shadow commits: each editing turn's working tree, kept on refs/mods/turns.
+// A temporary index keeps the person's index, branch and HEAD untouched.
+const SHADOW_REF = 'refs/mods/turns'
+const SHADOW_ENV = {
+  GIT_AUTHOR_NAME: 'terminal-polish',
+  GIT_AUTHOR_EMAIL: 'terminal-polish@localhost',
+  GIT_COMMITTER_NAME: 'terminal-polish',
+  GIT_COMMITTER_EMAIL: 'terminal-polish@localhost',
+}
+// One run at a time: two would share the temporary index and race on the ref.
+let shadowQueue: Promise<void> = Promise.resolve()
+const queueShadow = ($: EngineInterface, message: string) =>
+  (shadowQueue = shadowQueue.then(() => shadowCommit($, message)).catch(() => undefined))
+
+async function shadowCommit($: EngineInterface, message: string) {
+  if (!(await gitIsSafe($))) return
+  // Inside .git, so the temporary index is never part of the tree it snapshots.
+  const where = await $.process.run([...SAFE_GIT, 'rev-parse', '--path-format=absolute', '--git-path', 'mods-shadow.index'], {
+    timeoutMs: 3000,
+  })
+  if (where.exitCode !== 0 || !where.stdout.trim()) return
+  const env = { ...SHADOW_ENV, GIT_INDEX_FILE: where.stdout.trim() }
+  const git = (args: string[]) => $.process.run([...SAFE_GIT, ...args], { env, timeoutMs: 20000 })
+  const [prev, head] = await Promise.all([
+    git(['rev-parse', '-q', '--verify', SHADOW_REF]),
+    git(['rev-parse', '-q', '--verify', 'HEAD']),
+  ])
+  if (head.exitCode === 0 && (await git(['read-tree', 'HEAD'])).exitCode !== 0) return
+  if ((await git(['add', '-A'])).exitCode !== 0) return
+  const tree = (await git(['write-tree'])).stdout.trim()
+  if (!tree) return
+  const parent = prev.exitCode === 0 ? prev.stdout.trim() : head.exitCode === 0 ? head.stdout.trim() : ''
+  const made = await git(['-c', 'commit.gpgsign=false', 'commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', message])
+  const sha = made.stdout.trim()
+  // Only move the ref from the value read above: another session's run is never overwritten.
+  const old = prev.exitCode === 0 ? prev.stdout.trim() : '0'.repeat(40)
+  if (made.exitCode === 0 && sha) await git(['update-ref', SHADOW_REF, sha, old])
+}
+
+async function turnsCommand($: EngineInterface) {
+  if (!(await gitIsSafe($))) return 'Không chạy git ở repo này (.git/config khai báo chương trình git sẽ chạy).'
+  const log = await $.process.run([...SAFE_GIT, 'log', '-n', '15', '--format=%h  %cr  %s', SHADOW_REF], { timeoutMs: 5000 })
+  if (log.exitCode !== 0 || !log.stdout.trim())
+    return 'Chưa có commit nháp. Bật bằng /mods shadow, rồi mỗi lượt có sửa file sẽ được lưu.'
+  return [
+    `Commit nháp theo lượt (${SHADOW_REF}):`,
+    log.stdout.trimEnd(),
+    '',
+    'Xem thay đổi của một lượt:  git show --stat <sha>',
+    'Lấy lại một file từ lượt đó: git checkout <sha> -- <file>',
+  ].join('\n')
+}
+
+// ---- changelog: today's commit subjects, grouped by their conventional type.
+export function changelogOf(subjects: string[], day: string) {
+  const groups: [string, RegExp][] = [
+    ['Tính năng', /^feat(\(.+?\))?!?:\s*/],
+    ['Sửa lỗi', /^fix(\(.+?\))?!?:\s*/],
+  ]
+  const sections = new Map<string, string[]>()
+  for (const subject of subjects) {
+    if (/^chore(\(.+?\))?: release\b/.test(subject) || /^Merge /.test(subject)) continue
+    const hit = groups.find(([, re]) => re.test(subject))
+    const name = hit?.[0] ?? 'Khác'
+    sections.set(name, [...(sections.get(name) ?? []), hit ? subject.replace(hit[1], '') : subject])
+  }
+  if (sections.size === 0) return null
+  const order = ['Tính năng', 'Sửa lỗi', 'Khác'].filter(n => sections.has(n))
+  return [`## ${day}`, ...order.flatMap(n => ['', `### ${n}`, ...(sections.get(n) ?? []).map(l => `- ${l}`)])].join('\n')
+}
+
+async function changelogCommand($: EngineInterface, rest: string) {
+  if (!(await gitIsSafe($))) return 'Không chạy git ở repo này (.git/config khai báo chương trình git sẽ chạy).'
+  const log = await $.process.run([...SAFE_GIT, 'log', '--since=midnight', '--no-merges', '--format=%s'], { timeoutMs: 5000 })
+  if (log.exitCode !== 0) return 'Không đọc được git log (không phải git repo?).'
+  const text = changelogOf(lines(log.stdout), localDay(await $.clock.now()))
+  if (!text) return 'Hôm nay chưa có commit nào để ghi changelog.'
+  if (rest === 'write') {
+    const path = `${(await read($, root)) || '.'}/CHANGELOG.md`
+    let before = ''
+    try {
+      before = await $.fs.read(path)
+    } catch (error) {
+      if (await $.fs.exists(path)) throw error
+    }
+    const day = text.split('\n')[0] ?? ''
+    if (before.split(/\r?\n/).includes(day)) return `CHANGELOG.md đã có mục ${day.slice(3)}; sửa tay nếu cần thêm.`
+    const head = /^# [^\n]*\n+/.exec(before)?.[0] ?? ''
+    await $.fs.write(path, `${head || '# Changelog\n\n'}${text}\n\n${before.slice(head.length)}`.trimEnd() + '\n')
+    return `✓ Đã ghi vào ${path}:\n${text}`
+  }
+  const copied = await $.ui.copy({ text })
+  return `${text}${copied.isCopied ? '\n📋 Đã copy. /mods changelog write để ghi vào CHANGELOG.md.' : ''}`
+}
+
+// ---- AI monitor: every model response, by the agent loop that made it.
+// ponytail: list prices per MTok as of 2026-10 [input, output, cache read, cache write];
+// cache write assumed 1.25× input where unpublished. The engine only totals the
+// session's real cost, so per-agent dollars are estimates; update when prices move.
+const PRICES: [RegExp, readonly [number, number, number, number]][] = [
+  [/fable|mythos/, [10, 50, 0.25, 12.5]],
+  [/opus-5-5/, [4, 20, 0.2, 5]],
+  [/opus-4(-1)?($|-20)/, [15, 75, 1.5, 18.75]],
+  [/opus/, [5, 25, 0.5, 6.25]],
+  [/sonnet-5/, [2, 10, 0.2, 2.5]],
+  [/sonnet/, [3, 15, 0.3, 3.75]],
+  [/haiku-5-5/, [0.1, 0.5, 0.01, 0.125]],
+  [/haiku/, [1, 5, 0.1, 1.25]],
+]
+export function usdOf(model: string, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }) {
+  const p = PRICES.find(([re]) => re.test(model))?.[1]
+  if (!p) return 0
+  return (u.input_tokens * p[0] + u.output_tokens * p[1] + u.cache_read_input_tokens * p[2] + u.cache_creation_input_tokens * p[3]) / 1e6
+}
+const tok = (n: number) => (n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`)
+const shortModel = (m: string) => m.replace(/^claude-/, '')
+async function recordStep(
+  $: EngineInterface,
+  agentId: string | undefined,
+  effort: string | number | undefined,
+  u: { model: string; input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number },
+) {
+  const id = agentId ?? 'main'
+  const now = await $.clock.now()
+  const usd = usdOf(u.model, u)
+  await update($, agentStats, list => {
+    const was = list.find(a => a.id === id)
+    const row: AgentStat = {
+      id,
+      model: u.model,
+      effort: effort === undefined ? '' : String(effort),
+      startedAt: was?.startedAt ?? now,
+      lastAt: now,
+      steps: (was?.steps ?? 0) + 1,
+      input: (was?.input ?? 0) + u.input_tokens,
+      output: (was?.output ?? 0) + u.output_tokens,
+      cacheRead: (was?.cacheRead ?? 0) + u.cache_read_input_tokens,
+      cacheWrite: (was?.cacheWrite ?? 0) + u.cache_creation_input_tokens,
+      context: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+      usd: (was?.usd ?? 0) + usd,
+    }
+    return [row, ...list.filter(a => a.id !== id)].slice(0, 50)
+  })
+}
+const openMonitor = ($: EngineInterface) => $.ui.open({ id: MONITOR_PANE, title: 'AI monitor' })
+
 const openAccounts = ($: EngineInterface) => $.ui.open({ id: ACCOUNTS_PANE, title: 'Tài khoản Claude' })
 
 // ---- accounts: claude-swap's profiles. Every action goes through its /profile command,
@@ -2953,6 +3157,10 @@ async function helpText($: EngineInterface) {
     '  settings  tab cài đặt: bật/tắt nhanh mọi tính năng',
     `  theme <x> bảng màu: ${Object.keys(THEMES).join(' | ')}`,
     '  clear     xoá nội dung đang gõ trong ô nhập',
+    '  replay    xem lại từng file Claude sửa ở lượt vừa xong, từng diff một',
+    '  monitor   AI monitor: agent đang chạy, model, effort, thời gian, context, token, ≈ tiền',
+    '  turns     các commit nháp theo lượt (bật /mods shadow)',
+    '  changelog [write]  changelog hôm nay từ commit; write ghi vào CHANGELOG.md',
     '  accounts [x] tài khoản Claude (cần claude-swap): thêm, xoá, đổi nhanh; có x thì đổi sang x',
     '  sel       hành động với đoạn đang bôi đen (giải thích, dịch, copy)',
     '  find <x>  tìm x trong hội thoại này',
@@ -2997,7 +3205,7 @@ export const register: Register = on => {
         name: 'mods',
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
-          'settings | theme | accounts | clear | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
+          'settings | theme | accounts | clear | replay | monitor | turns | changelog | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
       })
     } catch {
       void notice($, 'terminal-polish: không đăng ký được /mods')
@@ -3149,6 +3357,16 @@ export const register: Register = on => {
         if (text) await addTodos($, [{ text, done: false }])
         return placed(await openTodo($), text ? `Đã thêm TODO: ${text}` : 'Đã mở bảng TODO.')
       }
+      case 'monitor':
+        return placed(await openMonitor($), 'Đã mở AI monitor.')
+      case 'turns':
+        return { text: await turnsCommand($) }
+      case 'changelog':
+        return { text: await changelogCommand($, args.slice(word.length).trim()) }
+      case 'replay': {
+        if ((await read($, replay)).length === 0) return { text: 'Chưa có lượt nào sửa file để xem lại.' }
+        return placed(await openReplay($), 'Đã mở Replay: n = bước sau, p = bước trước.')
+      }
       case 'account':
       case 'accounts': {
         // /profile can't run while this hook holds the turn (the host refuses it): defer past the return.
@@ -3250,6 +3468,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     // A subagent's turn must not reset the main turn's counters or model pick.
     if (e.agentId) return next(e)
+    turnSteps = []
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
     const [, , effect, s] = await Promise.all([
@@ -3289,14 +3508,20 @@ export const register: Register = on => {
   // at low effort, a complex one at high effort; a subagent's steps take the effort
   // its spawn picked. Effort is only set where the model takes one.
   on('turn.step', async function* ($, e, next) {
+    let step = e
     if (e.agentId) {
       const effort = agentEfforts.get(e.agentId)
-      return yield* next(effort && e.effort !== undefined ? { ...e, effort } : e)
+      if (effort && e.effort !== undefined) step = { ...e, effort }
+    } else {
+      const [pick, effort] = await Promise.all([read($, autoModel), read($, autoEffort)])
+      const model = pick === 'haiku' ? haikuIdFor(e.model) : undefined
+      if (model) step = { ...e, model }
+      else if (effort && e.effort !== undefined) step = { ...e, effort }
     }
-    const [pick, effort] = await Promise.all([read($, autoModel), read($, autoEffort)])
-    const model = pick === 'haiku' ? haikuIdFor(e.model) : undefined
-    if (model) return yield* next({ ...e, model })
-    return yield* next(effort && e.effort !== undefined ? { ...e, effort } : e)
+    const ran = yield* next(step)
+    // The AI monitor only displays: its failure never touches the step.
+    if (ran.usage) await recordStep($, step.agentId, step.effort, ran.usage).catch(() => undefined)
+    return ran
   })
 
   // Auto model for subagents: a model Claude left out is picked by the task; a
@@ -3334,6 +3559,10 @@ export const register: Register = on => {
     // so a limit hit yesterday does not hold this morning's prompts.
     // The limit is read from the store (another session may have set it); the
     // stats only when there is one.
+    if (!isForced && isTyped && s.promptlint) {
+      const hint = vagueHint(text)
+      if (hint) void notice($, hint).catch(() => undefined)
+    }
     const gated = !isForced && s.budget && kind !== 'task-notification'
     const [budget, weekLimit] = gated ? await Promise.all([$.store.get('budget'), $.store.get('budgetweek')]) : [0, 0]
     const dayOn = typeof budget === 'number' && budget > 0
@@ -3503,6 +3732,7 @@ export const register: Register = on => {
     const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
     let began = 0
     let pointId: number | undefined
+    let writeBefore = ''
     try {
       const [now, , , s] = await Promise.all([
         $.clock.now(),
@@ -3514,6 +3744,7 @@ export const register: Register = on => {
       if (e.tool === 'AskUserQuestion' && s.asknotify && !(s.quiet && inQuiet(new Date(now).getHours())))
         void $.ui.notify('Claude đang chờ bạn trả lời').catch(() => undefined)
       if (path && e.tool !== 'Read' && s.checkpoints) pointId = await snapshot($, path)
+      if (e.tool === 'Write') writeBefore = await $.fs.read(e.file_path).catch(() => '')
     } catch {
       // The row is only display.
     }
@@ -3550,6 +3781,10 @@ export const register: Register = on => {
         void startFx($, 'party')
       }
       if (isEdit && path) {
+        if (turnSteps.length < MAX_STEPS) {
+          if (e.tool === 'Edit') turnSteps.push({ path, tool: e.tool, ...editDiff(e.old_string, e.new_string) })
+          if (e.tool === 'Write') turnSteps.push({ path, tool: e.tool, ...editDiff(writeBefore, e.content) })
+        }
         if (s.format) await formatFile($, path)
         if (s.relatedtest) void relatedTests($, path)
         if (s.todos) {
@@ -3566,6 +3801,19 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
+    if (turnSteps.length > 0) {
+      const steps = turnSteps
+      turnSteps = []
+      await Promise.all([
+        update($, replay, () => steps),
+        update($, replayCount, () => steps.length),
+        update($, replayAt, () => 0),
+      ]).catch(() => undefined)
+      if ((await read($, settings)).shadow) {
+        const prompt = (await read($, liveTurn))?.text.split('\n')[0]?.slice(0, 72) || 'turn'
+        void queueShadow($, `turn: ${prompt} (${steps.length} edit)`)
+      }
+    }
     const ran = await next(e)
     const [s, t, live] = await Promise.all([read($, settings), read($, turn), read($, liveTurn)])
     longTimer?.cancel()
@@ -3736,6 +3984,7 @@ export const register: Register = on => {
       failing,
       effortPick,
       acc,
+      stepCount,
     ] = await Promise.all([
       read($, project),
       read($, git),
@@ -3756,6 +4005,7 @@ export const register: Register = on => {
       read($, testFail),
       read($, autoEffort),
       read($, accounts),
+      read($, replayCount),
     ])
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
@@ -3845,6 +4095,9 @@ export const register: Register = on => {
     const POWER = ''
     // A key row, survey style (`s: Session`), dim until pointed at.
     const keys: [string, string, string, () => unknown][] = [
+      ...(stepCount > 0
+        ? [['replay', `▶ Replay ${stepCount} `, 'r', () => void openReplay($).catch(() => undefined)] as [string, string, string, () => unknown]]
+        : []),
       ['sessions', 'Session', 's', () => void openPeers($)],
       ['dash', 'Bảng', 'd', () => void openDash($)],
       ['prompts', 'Prompt', 'p', () => void openPrompts($)],
@@ -3852,11 +4105,12 @@ export const register: Register = on => {
       ['sel', 'Chọn', 'v', () => void grabSelection($)],
       [
         'accounts',
-        `👤${acc?.list.find(a => a.active)?.name ?? ''}`,
+        `👤 ${acc?.list.find(a => a.active)?.name ?? 'Account'} `,
         'a',
         () => void openAccounts($).then(() => loadAccounts($)).catch(() => undefined),
       ],
-      ['clear', '🧹', 'x', () => void $.prompt.fill({ text: '', mode: 'replace' })],
+      ['monitor', '🤖 Monitor ', 'g', () => void openMonitor($).catch(() => undefined)],
+      ['clear', '🧹 Clear ', 'x', () => void $.prompt.fill({ text: '', mode: 'replace' })],
       ['hide', 'Ẩn', 'h', () => void setSetting($, 'band', false)],
     ]
     const buttons = (
@@ -4220,6 +4474,20 @@ export const register: Register = on => {
           {list.length} session · {busy} đang chạy · ctrl+x tab để gõ
         </Text>
         {list.length === 0 && <Text color={P.muted}>không tìm thấy session nào</Text>}
+        {Input && list.some(p => !p.isSelf && p.status !== 'busy') ? (
+          <Input
+            key="send-all"
+            placeholder="Gửi cho mọi session đang rảnh…"
+            submitLabel={`Gửi ${list.filter(p => !p.isSelf && p.status !== 'busy').length} session`}
+            onSubmit={text => {
+              if (!text.trim()) return
+              const idle = list.filter(p => !p.isSelf && p.status !== 'busy')
+              void Promise.all(idle.map(p => $.session.send({ to: { sessionId: p.id }, text }).catch(() => null)))
+                .then(rs => notice($, `✓ Đã gửi tới ${rs.filter(r => r?.isDelivered).length}/${idle.length} session`))
+                .catch(() => undefined)
+            }}
+          />
+        ) : null}
         {list.map(peer => (
           <Box key={`peer-${peer.id}`} flexDirection="column" marginTop={1}>
             <Box flexDirection="row" justifyContent="space-between">
@@ -4541,6 +4809,99 @@ export const register: Register = on => {
             }}
           />
         ) : null}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: MONITOR_PANE }, async ($, e) => {
+    const P = await palette($)
+    const { Box, Text } = $.ui.resolve(e)
+    const [rows, live, use, now] = await Promise.all([read($, agentStats), read($, agents), read($, usage), $.clock.now()])
+    if (rows.length === 0) return <Text color={P.muted}>Chưa có phản hồi nào của model trong session này.</Text>
+    const byId = new Map(live.map(a => [a.id, a]))
+    const running = live.filter(a => a.status === 'running' || a.status === 'pending' || a.status === 'waiting').length
+    const total = rows.reduce((sum, r) => sum + r.usd, 0)
+    const sorted = [...rows].sort((a, b) => (a.id === 'main' ? -1 : b.id === 'main' ? 1 : b.lastAt - a.lastAt))
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Box flexDirection="row" gap={2} flexWrap="wrap">
+          <Text color={P.accent} bold>{`🤖 ${running} agent đang chạy`}</Text>
+          <Text color={P.muted}>{`${rows.length - (rows.some(r => r.id === 'main') ? 1 : 0)} agent trong session`}</Text>
+          <Text color={P.warn}>{`≈ $${total.toFixed(2)} ước tính`}</Text>
+          {use?.usd != null ? <Text color={P.ok}>{`session thật: $${use.usd.toFixed(2)}`}</Text> : null}
+        </Box>
+        {sorted.map(r => {
+          const info = byId.get(r.id)
+          const isLive = r.id === 'main' || (info ? ['running', 'pending', 'waiting'].includes(info.status) : false)
+          const name = r.id === 'main' ? 'Main' : (info?.label ?? r.id.slice(0, 8))
+          const ms = (isLive && r.id !== 'main' ? now : r.lastAt) - r.startedAt
+          return (
+            <Box key={`mon-${r.id}`} flexDirection="column" marginTop={1}>
+              <Box flexDirection="row" gap={1}>
+                <Text color={isLive ? P.ok : P.muted}>{isLive ? '●' : '○'}</Text>
+                <Text color={r.id === 'main' ? P.accent : P.violet} bold wrap="truncate-end">
+                  {name}
+                </Text>
+                <Text color={P.muted}>{info?.status ?? (r.id === 'main' ? '' : 'xong')}</Text>
+              </Box>
+              <Text color={P.muted} wrap="wrap">
+                {`  ${shortModel(r.model)}${r.effort ? ` · ${r.effort}` : ''} · ${duration(Math.max(0, ms))} · ${r.steps} lần gọi`}
+              </Text>
+              <Text wrap="wrap">
+                {`  ctx ${tok(r.context)} · in ${tok(r.input)} · out ${tok(r.output)} · cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)} · ≈ $${r.usd.toFixed(3)}`}
+              </Text>
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: REPLAY_PANE }, async ($, e) => {
+    const P = await palette($)
+    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    const [steps, at] = await Promise.all([read($, replay), read($, replayAt)])
+    if (steps.length === 0) return <Text color={P.muted}>Chưa có lượt nào sửa file.</Text>
+    const i = Math.min(at, steps.length - 1)
+    const step = steps[i] ?? steps[0]!
+    const go = (to: number) => void update($, replayAt, () => Math.max(0, Math.min(steps.length - 1, to)))
+
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        <Box flexDirection="row" gap={1}>
+          <Text color={P.accent} bold>{`Bước ${i + 1}/${steps.length}`}</Text>
+          <Text color={P.muted}>{step.tool}</Text>
+          <Text color={P.ok}>{`+${step.added}`}</Text>
+          <Text color={P.err}>{`−${step.removed}`}</Text>
+        </Box>
+        <Box flexDirection="row" flexWrap="wrap">
+          {steps.map((_, j) => (
+            <Text key={`rp-cell-${j}`} color={j === i ? P.ink : P.muted} {...(j === i ? { backgroundColor: P.accent } : {})}>
+              {` ${j + 1} `}
+            </Text>
+          ))}
+        </Box>
+        <Text color={P.muted} wrap="truncate-start">
+          {step.path}
+        </Text>
+        <Code source={step.diff} format="diff" path={step.path} />
+        <Box flexDirection="row" gap={1}>
+          <Button key="rp-prev" label="◀ Prev" hotkey="p" onPress={() => go(i - 1)} />
+          <Button key="rp-next" label="Next ▶" hotkey="n" onPress={() => go(i + 1)} />
+          <Button
+            key="rp-explain"
+            label="💡 Explain"
+            hotkey="e"
+            onPress={() =>
+              void $.prompt
+                .submit({ text: `Giải thích ngắn gọn vì sao có thay đổi này ở ${step.path}:\n~~~~diff\n${step.diff}\n~~~~` })
+                .then(() => notice($, 'Đã xếp hàng prompt'))
+                .catch(() => undefined)
+            }
+          />
+          <Button key="rp-close" label="✕ Close" hotkey="c" onPress={() => void $.ui.close({ id: REPLAY_PANE })} />
+        </Box>
       </Box>
     )
   })
@@ -4943,14 +5304,17 @@ export const register: Register = on => {
     const [live, work] = s.msgactions ? await Promise.all([read($, liveTurn), read($, turn)]) : [null, null]
     const lost = s.msgactions ? await read($, failed) : null
     const liveId = live && live.text === e.props.text ? live.id : undefined
-    const icon = (glyph: string, color: string) => <Text color={color}>{glyph}</Text>
+    const icon = (glyph: string, color: string, word: string) => [
+      <Text color={color}>{glyph}</Text>,
+      <Text color={P.muted}>{` ${word} `}</Text>,
+    ]
     const actions = s.msgactions ? (
       <Box flexDirection="row" gap={2} marginLeft={bracket ? 4 : 2}>
         <Button key={`copy-${e.requestId}`} label="Sao chép" plain onPress={() => void copyText($, e.props.text)}>
-          {icon('📋', P.cyan)}
+          {icon('📋', P.cyan, 'Copy')}
         </Button>
         <Button key={`save-${e.requestId}`} label="Lưu" plain onPress={() => void savePrompt($, e.props.text)}>
-          {icon('⭐', P.ok)}
+          {icon('⭐', P.ok, 'Save')}
         </Button>
         {lost?.text === e.props.text && !liveId ? (
           <Button
@@ -4959,7 +5323,7 @@ export const register: Register = on => {
             plain
             onPress={() => void $.prompt.submit({ text: e.props.text })}
           >
-            {icon('🔄', P.info)}
+            {icon('🔄', P.info, 'Retry')}
           </Button>
         ) : null}
         {liveId && !work?.edits ? (
@@ -4974,7 +5338,7 @@ export const register: Register = on => {
                 .then(() => $.prompt.fill({ text: e.props.text, mode: 'replace' }))
             }
           >
-            {icon('📝', P.warn)}
+            {icon('📝', P.warn, 'Edit')}
           </Button>
         ) : null}
         {liveId ? (
@@ -4984,7 +5348,7 @@ export const register: Register = on => {
             plain
             onPress={() => void $.turn.abort({ turnId: liveId }).catch(() => undefined)}
           >
-            {icon('🛑', P.err)}
+            {icon('🛑', P.err, 'Stop')}
           </Button>
         ) : null}
       </Box>
@@ -5024,11 +5388,13 @@ export const register: Register = on => {
               onPress={() => void copyText($, b.code)}
             >
               <Text color={P.cyan}>📋</Text>
+              <Text color={P.muted}>{` Copy${b.lang ? ` ${b.lang}` : ''} `}</Text>
             </Button>
           ))}
           {links.map((l, i) => (
             <Button key={`open-${e.requestId}-${i}`} label={baseName(l.replace(/\/+$/, '')) || l} plain dimColor onPress={() => void openTarget($, l)}>
               <Text color={P.cyan}>🔗</Text>
+              <Text color={P.muted}> Open </Text>
             </Button>
           ))}
         </Box>

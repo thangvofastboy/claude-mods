@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { codeBlocks, linksOf } from '../hooks/register'
+import { changelogOf, codeBlocks, editDiff, linksOf, usdOf, vagueHint } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -278,7 +278,7 @@ test('a prompt in a frame has no bracket glyphs and keeps its text', async ($, o
 })
 
 // Message actions are colored icons only; the words stay as the buttons' names.
-test('a sent prompt shows the copy icon without its label text', async ($, on) => {
+test('a sent prompt shows the copy icon with a short English word, not its label', async ($, on) => {
   mock.store(on)
   const ui = await $.ui.mount({
     plugin: 'terminal-polish',
@@ -287,8 +287,8 @@ test('a sent prompt shows the copy icon without its label text', async ($, on) =
     requestId: 'r1',
     props: { text: 'xin chào', origin: { kind: 'composer' }, isExpanded: false },
   })
-  expect((await ui.find({ key: 'copy-r1' }))?.text).toBe('📋')
-  expect((await ui.find({ key: 'save-r1' }))?.text).toBe('⭐')
+  expect((await ui.find({ key: 'copy-r1' }))?.text).toBe('📋 Copy ')
+  expect((await ui.find({ key: 'save-r1' }))?.text).toBe('⭐ Save ')
   expect(await ui.findAll({ type: 'Text', text: /Sao chép/ })).toEqual([])
   await ui.unmount()
 })
@@ -434,6 +434,91 @@ test('the band account button opens the accounts pane with the profiles loaded',
   })
   await ui.press({ key: 'accounts' })
   expect(opened).toContain('terminal-polish-accounts')
-  expect((await ui.find({ key: 'accounts' }))?.text).toContain('👤work')
+  expect((await ui.find({ key: 'accounts' }))?.text).toContain('👤 work')
   await ui.unmount()
+})
+
+test('replay diffs keep one line of context and cap long steps', () => {
+  const edit = editDiff('a\nb\nc\nd\ne', 'a\nb\nX\nd\ne')
+  expect(edit).toEqual({ diff: '⋯\n b\n-c\n+X\n d\n⋯', added: 1, removed: 1 })
+  const created = editDiff('', Array.from({ length: 20 }, (_, i) => `l${i}`).join('\n'))
+  expect(created.added).toBe(20)
+  expect(created.diff.split('\n')).toHaveLength(13)
+  expect(created.diff).toContain('… 8 dòng nữa')
+})
+
+test('/mods replay says so when no turn has edited files', async ($, on) => {
+  mock.store(on)
+  const ran = await $.command.run({ command: 'mods', args: 'replay', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  expect(ran.text).toContain('Chưa có lượt nào')
+})
+
+test('prompt lint flags short pointing prompts only', () => {
+  expect(vagueHint('sửa cái này đi')).not.toBeNull()
+  expect(vagueHint('fix it')).not.toBeNull()
+  expect(vagueHint('fix it in `band.tsx`')).toBeNull()
+  expect(vagueHint('commit, push, danh tag')).toBeNull()
+  expect(vagueHint('/mods replay')).toBeNull()
+})
+
+test('changelog groups today by commit type and skips releases', () => {
+  const text = changelogOf(['feat: replay pane', 'fix(band): spacing', 'chore: release v0.15.0', 'docs: readme'], '2026-10-30')
+  expect(text).toBe('## 2026-10-30\n\n### Tính năng\n- replay pane\n\n### Sửa lỗi\n- spacing\n\n### Khác\n- docs: readme')
+  expect(changelogOf(['chore: release v1.0.0'], 'x')).toBeNull()
+})
+
+test('usdOf prices a response by its model', () => {
+  const u = { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  expect(usdOf('claude-opus-5-5', u)).toBe(24)
+  expect(usdOf('claude-sonnet-5-5', u)).toBe(12)
+  expect(usdOf('unknown-model', u)).toBe(0)
+})
+
+test('the AI monitor shows each agent loop with model, effort, tokens and cost', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  const usage = { model: 'claude-sonnet-5-5', input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 0 }
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
+  })
+  const step = async (agentId?: string) => {
+    const stream = $.turn.step({ turnId: 't', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1, ...(agentId ? { agentId } : {}) } as never)
+    for await (const _ of stream as AsyncIterable<unknown>) void _
+  }
+  await step()
+  await step('a1')
+  await step('a1')
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'terminal-polish-monitor',
+    props: { title: 'AI monitor', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  expect(texts).toContain('Main')
+  expect(texts).toContain('sonnet-5-5 · medium')
+  expect(texts).toContain('2 lần gọi')
+  expect(texts).toContain('ctx 3.0k')
+  await ui.unmount()
+})
+
+test('a turn that edits a file publishes a replay with its diff', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '' }) as never)
+  on('tool.call', () => ({ result: { ok: true } }) as never)
+  on('ui.toast', () => ({ value: undefined }))
+  await $.turn.start({ turnId: 't1', text: 'đổi tên' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/tmp/x.ts', old_string: 'const a = 1', new_string: 'const b = 1' } as never)
+  await $.turn.complete({ turnId: 't1', answer: 'xong', durationMs: 10, isAborted: false, reason: 'answer', text: 'đổi tên' } as never)
+  const band = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  })
+  expect((await band.find({ key: 'replay' }))?.text).toContain('Replay 1')
+  await band.unmount()
 })
