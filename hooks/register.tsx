@@ -731,14 +731,20 @@ export function prDraft(log: string, stat: string) {
 export const codeBlocks = (text: string) =>
   [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map(m => ({ lang: (m[1] ?? '').trim(), code: (m[2] ?? '').replace(/\n$/, '') }))
 
-// Links and file paths a reply mentions, outside fenced code. A file counts only in `backticks` with an extension; a :line suffix is dropped.
-export const linksOf = (text: string) => {
+// Links and paths a reply mentions, outside fenced code. A path counts only in `backticks`, with an extension (file) or a slash (folder); a :line suffix is dropped.
+// `bare` (a typed prompt) also takes unquoted paths: ~/x, or two segments from / ./ ../ so a /command is not one.
+export const linksOf = (text: string, bare = false) => {
   const prose = text.replace(/```[\s\S]*?```/g, '')
+  const typed = bare
+    ? [...prose.matchAll(/(?:^|[\s(])(~\/[\w.@-]+(?:\/[\w.@-]*)*|\.{0,2}\/[\w.@-]+(?:\/[\w.@-]*)+)/g)].map(m =>
+        (m[1] ?? '').replace(/[.,;:!?]+$/, ''),
+      )
+    : []
   const urls = [...prose.matchAll(/https?:\/\/[^\s<>()`'"\]]+/g)].map(m => m[0].replace(/[.,;:!?*_]+$/, ''))
-  const files = [...prose.matchAll(/`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]+)*\.\w+)(?::\d+(?::\d+)?)?`/g)]
+  const files = [...prose.matchAll(/`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]*)*)(?::\d+(?::\d+)?)?`/g)]
     .map(m => m[1] ?? '')
-    .filter(f => !/^https?:/.test(f))
-  return [...new Set([...urls, ...files])].slice(0, 8)
+    .filter(f => !/^https?:/.test(f) && (f.includes('/') || /[\w-]\.\w+$/.test(f)))
+  return [...new Set([...urls, ...files, ...typed])].slice(0, 16)
 }
 
 export const pinText = (answer: string) => {
@@ -1212,15 +1218,62 @@ function thumbSize(data: string) {
 
 const OPEN = '{ command -v xdg-open >/dev/null && opener=xdg-open || opener=open; } && ("$opener" "$f" >/dev/null 2>&1 &)'
 
-// A URL opens in the browser, a file in the app the desktop picks for it.
-export async function openTarget($: EngineInterface, target: string) {
+// The file manager shows the path selected where it can (macOS, a FileManager1 desktop), else opens its folder.
+const REVEAL = `a=$(realpath "$f") || exit 1
+if [ "$(uname)" = Darwin ]; then open -R "$a"
+elif gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 --method org.freedesktop.FileManager1.ShowItems "['file://$(printf %s "$a" | sed "s/%/%25/g; s/ /%20/g; s/#/%23/g; s/?/%3F/g; s/'/%27/g")']" "" >/dev/null 2>&1; then :
+else [ -d "$a" ] || f=$(dirname "$a"); ${OPEN}; fi`
+
+// A URL opens in the browser, a file in the app the desktop picks for it; `reveal` shows a path in the file manager instead.
+export async function openTarget($: EngineInterface, target: string, reveal = false) {
   const script = /^https?:/.test(target)
     ? `f="$1" && ${OPEN}`
-    : `f="$1"; case "$f" in "~/"*) f="$HOME/\${f#\~/}";; -*) f="./$f";; esac; [ -e "$f" ] || { echo "không tồn tại: $1" >&2; exit 1; }; ${OPEN}`
+    : `f="$1"; case "$f" in "~/"*) f="$HOME/\${f#\~/}";; -*) f="./$f";; esac; [ -e "$f" ] || { echo "không tồn tại: $1" >&2; exit 1; }; ${reveal ? REVEAL : OPEN}`
   // Relative paths in a reply are relative to the project, not to wherever the engine runs.
   const cwd = (await read($, root)) || undefined
   const run = await $.process.run(['sh', '-c', script, 'sh', target], { cwd, timeoutMs: 10000 })
   if (run.exitCode !== 0) void notice($, `Không mở được: ${run.stderr.trim() || run.exitCode}`)
+}
+
+// Whether each path is there, asked once: a reply's `/mods` or `owner/repo` gets no button that can only fail.
+// ponytail: a path missing at first sight stays missing until the cache (500) clears.
+const there = new Map<string, boolean>()
+export async function openable($: EngineInterface, links: string[]) {
+  if (!links.length) return links
+  const [dir, me] = await Promise.all([read($, root), read($, home)])
+  const ok = await Promise.all(
+    links.map(async l => {
+      if (/^https?:/.test(l)) return true
+      const p = l.startsWith('~/') ? `${me}/${l.slice(2)}` : l.startsWith('/') || !dir ? l : `${dir}/${l}`
+      let hit = there.get(p)
+      if (hit === undefined) {
+        hit = await $.fs.exists(p).catch(() => false)
+        if (there.size >= 500) there.clear()
+        there.set(p, hit)
+      }
+      return hit
+    }),
+  )
+  return links.filter((_, i) => ok[i]).slice(0, 8)
+}
+
+// 🔗 opens each link or path; 📂 shows a path in the file manager.
+function linkButtons($: EngineInterface, e: { requestId: string } & Parameters<EngineInterface['ui']['resolve']>[0], P: Palette, links: string[]) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  return links.map((l, i) => (
+    <Box key={`link-${e.requestId}-${i}`} flexDirection="row" gap={1}>
+      <Button key={`open-${e.requestId}-${i}`} label={baseName(l.replace(/\/+$/, '')) || l} plain dimColor onPress={() => void openTarget($, l)}>
+        <Text color={P.cyan}>🔗</Text>
+        <Text color={P.muted}> Open </Text>
+      </Button>
+      {/^https?:/.test(l) ? null : (
+        <Button key={`reveal-${e.requestId}-${i}`} label={`Mở vị trí ${l}`} plain dimColor onPress={() => void openTarget($, l, true)}>
+          <Text color={P.cyan}>📂</Text>
+          <Text color={P.muted}> Folder </Text>
+        </Button>
+      )}
+    </Box>
+  ))
 }
 
 export async function openPic($: EngineInterface, pic: Pic) {
@@ -5288,7 +5341,7 @@ export const register: Register = on => {
               <Image key={`img-${i}`} source={{ png: pic.data }} {...thumbSize(pic.data)} alt={pic.label} />
             ) : null}
             <Button
-              key={`open-${e.requestId}-${i}`}
+              key={`pic-${e.requestId}-${i}`}
               label={`🖼 ${pic.label} · mở`}
               plain
               dimColor
@@ -5303,6 +5356,7 @@ export const register: Register = on => {
     // ponytail: matched by text, so an identical earlier prompt shows them too; key on a row id if one appears.
     const [live, work] = s.msgactions ? await Promise.all([read($, liveTurn), read($, turn)]) : [null, null]
     const lost = s.msgactions ? await read($, failed) : null
+    const links = s.msgactions ? await openable($, linksOf(e.props.text, true)) : []
     const liveId = live && live.text === e.props.text ? live.id : undefined
     const icon = (glyph: string, color: string, word: string) => [
       <Text color={color}>{glyph}</Text>,
@@ -5341,6 +5395,7 @@ export const register: Register = on => {
             {icon('📝', P.warn, 'Edit')}
           </Button>
         ) : null}
+        {linkButtons($, e, P, links)}
         {liveId ? (
           <Button
             key={`abort-${e.requestId}`}
@@ -5371,7 +5426,7 @@ export const register: Register = on => {
     const s = await read($, settings)
     const show = s.msgactions && !e.props.isSummary
     const blocks = show ? codeBlocks(e.props.text) : []
-    const links = show ? linksOf(e.props.text) : []
+    const links = show ? await openable($, linksOf(e.props.text)) : []
     if (!blocks.length && !links.length) return next(e)
     const [P] = await look($)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -5391,12 +5446,7 @@ export const register: Register = on => {
               <Text color={P.muted}>{` Copy${b.lang ? ` ${b.lang}` : ''} `}</Text>
             </Button>
           ))}
-          {links.map((l, i) => (
-            <Button key={`open-${e.requestId}-${i}`} label={baseName(l.replace(/\/+$/, '')) || l} plain dimColor onPress={() => void openTarget($, l)}>
-              <Text color={P.cyan}>🔗</Text>
-              <Text color={P.muted}> Open </Text>
-            </Button>
-          ))}
+          {linkButtons($, e, P, links)}
         </Box>
       </Box>
     )

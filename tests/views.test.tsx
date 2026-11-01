@@ -320,6 +320,9 @@ test('a reply lists its links and backticked files, skipping code blocks', () =>
   const text = 'Xem https://example.com/a?b=1. và `hooks/register.tsx:42`, `~/x.md`.\n```\nhttps://inside.dev `no.ts`\n```'
   expect(linksOf(text)).toEqual(['https://example.com/a?b=1', 'hooks/register.tsx', '~/x.md'])
   expect(linksOf('**https://x.dev/y**')).toEqual(['https://x.dev/y'])
+  expect(linksOf('folders `hooks/`, `~/.claude`, `/tmp/a b`; not `src`')).toEqual(['hooks/', '~/.claude'])
+  expect(linksOf('/mods xem ~/notes.md và /home/a/b/, (./src/x.ts).', true)).toEqual(['~/notes.md', '/home/a/b/', './src/x.ts'])
+  expect(linksOf('/mods ~/a', false)).toEqual([])
 })
 
 test('a scene theme draws its animated strip on desktop only', async ($, on) => {
@@ -521,4 +524,30 @@ test('a turn that edits a file publishes a replay with its diff', async ($, on) 
   })
   expect((await band.find({ key: 'replay' }))?.text).toContain('Replay 1')
   await band.unmount()
+})
+
+test('a reply gets open and folder buttons only for paths that are there', async ($, on) => {
+  mock.store(on)
+  const asked: string[] = []
+  on('fs.exists', ($, e) => (asked.push(e.path), { value: e.path.endsWith('hooks/register.tsx') }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine reply</Text>
+  })
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'terminal',
+    component: 'AssistantMessage',
+    requestId: 'a2',
+    props: { text: 'Gõ `/mods`, xem `hooks/register.tsx:5` và https://x.dev', isFirstOfReply: true },
+  })
+  // Links come URLs first: the URL gets no folder button, `/mods` no button at all.
+  expect(await ui.find({ key: 'open-a2-0' })).toBeDefined()
+  expect(await ui.find({ key: 'reveal-a2-0' })).toBeUndefined()
+  expect(await ui.find({ key: 'reveal-a2-1' })).toBeDefined()
+  expect(await ui.find({ key: 'open-a2-2' })).toBeUndefined()
+  // Each path is asked once; the answer is cached.
+  const baseName = (p: string) => p.split('/').pop()
+  expect(asked.map(baseName)).toEqual(['mods', 'register.tsx'])
+  await ui.unmount()
 })
