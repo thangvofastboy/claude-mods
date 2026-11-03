@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { changelogOf, codeBlocks, editDiff, linksOf, usdOf, vagueHint } from '../hooks/register'
+import { absPathOf, changelogOf, codeBlocks, editDiff, linksOf, usdOf, vagueHint } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -550,4 +550,13 @@ test('a reply gets open and folder buttons only for paths that are there', async
   const baseName = (p: string) => p.split('/').pop()
   expect(asked.map(baseName)).toEqual(['mods', 'register.tsx'])
   await ui.unmount()
+})
+
+test('a link opens at the same absolute path its button was checked at', () => {
+  const root = '/p/claude-mods'
+  expect(absPathOf('hooks/register.tsx', root, '/h')).toBe('/p/claude-mods/hooks/register.tsx')
+  expect(absPathOf('../OFA', root, '/h')).toBe('/p/claude-mods/../OFA')
+  expect(absPathOf('~/x/y.md', root, '/h')).toBe('/h/x/y.md')
+  expect(absPathOf('/etc/hosts', root, '/h')).toBe('/etc/hosts')
+  expect(absPathOf('-x.md', '', '/h')).toBe('./-x.md')
 })

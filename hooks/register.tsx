@@ -1226,25 +1226,29 @@ else [ -d "$a" ] || f=$(dirname "$a"); ${OPEN}; fi`
 
 // A URL opens in the browser, a file in the app the desktop picks for it; `reveal` shows a path in the file manager instead.
 export async function openTarget($: EngineInterface, target: string, reveal = false) {
-  const script = /^https?:/.test(target)
-    ? `f="$1" && ${OPEN}`
-    : `f="$1"; case "$f" in "~/"*) f="$HOME/\${f#\~/}";; -*) f="./$f";; esac; [ -e "$f" ] || { echo "không tồn tại: $1" >&2; exit 1; }; ${reveal ? REVEAL : OPEN}`
-  // Relative paths in a reply are relative to the project, not to wherever the engine runs.
-  const cwd = (await read($, root)) || undefined
-  const run = await $.process.run(['sh', '-c', script, 'sh', target], { cwd, timeoutMs: 10000 })
+  const url = /^https?:/.test(target)
+  // The same absolute path `openable` checked: the shell's cwd is not trusted to match it.
+  const f = url ? target : await absPath($, target)
+  if (!url && !(await $.fs.exists(f).catch(() => false))) return void notice($, `Không mở được: không tồn tại ${target}`)
+  const run = await $.process.run(['sh', '-c', `f="$1" && ${url || !reveal ? OPEN : REVEAL}`, 'sh', f], { timeoutMs: 10000 })
   if (run.exitCode !== 0) void notice($, `Không mở được: ${run.stderr.trim() || run.exitCode}`)
 }
+
+// A reply's path, absolute: `~/` from home, relative from the project root.
+// `./` (no root yet) keeps a name starting with `-` from reading as an option to the opener.
+export const absPathOf = (l: string, dir: string, me: string) =>
+  l.startsWith('~/') ? `${me}/${l.slice(2)}` : l.startsWith('/') ? l : dir ? `${dir}/${l}` : `./${l}`
+const absPath = async ($: EngineInterface, l: string) => absPathOf(l, await read($, root), await read($, home))
 
 // Whether each path is there, asked once: a reply's `/mods` or `owner/repo` gets no button that can only fail.
 // ponytail: a path missing at first sight stays missing until the cache (500) clears.
 const there = new Map<string, boolean>()
 export async function openable($: EngineInterface, links: string[]) {
   if (!links.length) return links
-  const [dir, me] = await Promise.all([read($, root), read($, home)])
   const ok = await Promise.all(
     links.map(async l => {
       if (/^https?:/.test(l)) return true
-      const p = l.startsWith('~/') ? `${me}/${l.slice(2)}` : l.startsWith('/') || !dir ? l : `${dir}/${l}`
+      const p = await absPath($, l)
       let hit = there.get(p)
       if (hit === undefined) {
         hit = await $.fs.exists(p).catch(() => false)
