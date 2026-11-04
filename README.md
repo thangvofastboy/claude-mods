@@ -63,12 +63,13 @@ Rồi gõ **`/mods`** để xem toàn bộ lệnh, hoặc **`/mods settings`** �
 | ⚡ | **Powerline** | *(tùy chọn, cần Nerd Font)* dải trạng thái thành các khối màu nối bằng ``. |
 | 🖼️ | **Ảnh** | Logo PNG thật ở màn chào trên kitty và Ghostty. Ảnh paste vào prompt hiện thumbnail ngay dưới tin nhắn (PNG dưới 2 MiB, trên kitty và Ghostty); nút **🖼 [Image #n] · mở** luôn có, bấm để mở ảnh gốc bằng trình xem của hệ điều hành. |
 | 🤖 | **Đếm agent** | Khi có subagent đang chạy, dải trạng thái hiện `🤖 2 chạy · 5/8 xong`. |
-| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có `📋 Copy` và `⭐ Save` (lưu vào Prompt nhanh); lượt lỗi có thêm `🔄 Retry` (gửi lại); tin của lượt đang chạy có thêm `📝 Edit` (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và `🛑 Stop` (huỷ lượt). Dưới mỗi câu trả lời có nút `📋 Copy` cho từng khối code, và nút `🔗 Open` cho mỗi link (mở trong trình duyệt) hay file trong `backtick` (mở bằng ứng dụng mặc định). Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
+| 📋 | **Icon dưới tin nhắn** | Dưới mỗi tin nhắn bạn đã gửi có `📋 Copy` và `⭐ Save` (lưu vào Prompt nhanh); lượt lỗi có thêm `🔄 Retry` (gửi lại); tin của lượt đang chạy có thêm `📝 Edit` (dừng lượt và đưa tin về ô nhập để sửa, chỉ khi AI chưa sửa file nào) và `🛑 Stop` (huỷ lượt). Dưới mỗi câu trả lời có nút `📋 Copy` cho từng khối code, và nút `🔗 <tên>` cho mỗi link (mở trong trình duyệt) hay file trong `backtick` (mở bằng ứng dụng mặc định; `file.php:281` mở trong VS Code, Cursor hoặc Zed đúng dòng; tên file trần được tìm trong repo bằng `git ls-files`), kèm `📂 Folder` để mở thư mục. Từ 4 link trở lên thì gộp thành `🔗 N link ▾`. Câu trả lời mới nhất kết thúc bằng câu hỏi có lựa chọn (`` `a` hay `b`? `` hoặc danh sách `1. **…**`) có nút `▸` để trả lời bằng một lần bấm. Câu trả lời dài có `📋 Linear` (markdown nguyên bản) và `📋 Discord` (bảng thành khối code thẳng cột, heading từ `####` thành chữ đậm, bỏ đường kẻ ngang, ô việc thành ☐/☑; báo khi vượt 2000 ký tự). Bật/tắt: `/mods msgactions` hoặc trong ⚙ Cài đặt. |
 | 🧭 | **Lịch sử prompt** | `/mods history <x>` tìm x trong prompt của session này và tối đa 8 session gần đây trong dự án (không đảm bảo đúng thứ tự mới nhất). |
 | 🧾 | **Soạn mô tả PR** | `/mods pr` soạn sẵn mô tả PR từ các commit và file thay đổi so với `main` (hoặc `master`). |
 | 📌 | **Ghim câu trả lời** | `/mods pin` ghim câu trả lời gần nhất của Claude vào ghi chú dự án. |
 | 📤 | **Xuất hội thoại** | `/mods export` ghi toàn bộ hội thoại ra file Markdown trong thư mục nhà, kèm danh sách file đã sửa. |
 | 📊 | **Quota và giờ reset** | `/mods quota` cho biết mức dùng 5h/7d và còn bao lâu nữa reset. Từ 90% có cảnh báo, mỗi cửa sổ chỉ báo một lần. |
+| 🔀 | **PR & CI** | Nhánh có PR đang mở thì dải trạng thái hiện `PR #12 ◌ CI 3/5`, rồi `✓ CI` hoặc `✗ CI 1 lỗi`; CI chạy xong thì có thông báo. Cần `gh`, hỏi GitHub tối đa 1 lần/phút, bỏ qua `main`/`master`. Tắt: `/mods prci`. |
 | ✗ | **Test lỗi trên dải trạng thái** | Sau lệnh test thất bại, dải trạng thái hiện tên test lỗi đầu tiên. Tắt: `/mods testfail`. |
 | 🧪 | **Test liên quan khi sửa file** | Bật `relatedtest`: sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest). Mặc định tắt vì tốn thời gian. |
 | ❓ | **Báo khi Claude hỏi** | Khi Claude hỏi bạn (AskUserQuestion), có thông báo hệ điều hành để bạn không bỏ lỡ. Tắt: `/mods asknotify`. |
@@ -252,7 +253,7 @@ Mở bằng **`/mods settings`** hoặc nút **Cài đặt**. Bấm vào một d
 | `compact` dải trạng thái 1 hàng | ⬜ | | `weather` thời tiết context | ✅ |
 | `blast` xem trước lệnh rủi ro | ✅ | | `fun` câu vui & dự báo hài | ✅ |
 | `ctxwarn` nhắc /compact | ✅ | | `autoupdate` tự cập nhật khi mở Claude | ✅ |
-| `msgactions` nút dưới tin nhắn | ✅ | | | | |
+| `msgactions` nút dưới tin nhắn | ✅ | | `prci` PR & CI trên dải trạng thái | ✅ |
 | `asknotify` báo khi Claude hỏi | ✅ | | `quotaalert` cảnh báo quota 90% | ✅ |
 | `quiet` giờ yên lặng 22h–8h | ⬜ | | `testfail` tên test lỗi | ✅ |
 | `relatedtest` test liên quan khi sửa | ⬜ | | | | |
