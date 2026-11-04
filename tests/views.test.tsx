@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { absPathOf, changelogOf, codeBlocks, editDiff, linksOf, usdOf, vagueHint } from '../hooks/register'
+import { absPathOf, changelogOf, codeBlocks, editDiff, linksOf, linkName, lineOf, choicesOf, discordOf, prOf, prLabel, usdOf, vagueHint } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -318,11 +318,17 @@ test('each fenced block of a reply gets its own copy button', async ($, on) => {
 
 test('a reply lists its links and backticked files, skipping code blocks', () => {
   const text = 'Xem https://example.com/a?b=1. và `hooks/register.tsx:42`, `~/x.md`.\n```\nhttps://inside.dev `no.ts`\n```'
-  expect(linksOf(text)).toEqual(['https://example.com/a?b=1', 'hooks/register.tsx', '~/x.md'])
+  expect(linksOf(text)).toEqual(['https://example.com/a?b=1', 'hooks/register.tsx:42', '~/x.md'])
   expect(linksOf('**https://x.dev/y**')).toEqual(['https://x.dev/y'])
   expect(linksOf('folders `hooks/`, `~/.claude`, `/tmp/a b`; not `src`')).toEqual(['hooks/', '~/.claude'])
   expect(linksOf('/mods xem ~/notes.md và /home/a/b/, (./src/x.ts).', true)).toEqual(['~/notes.md', '/home/a/b/', './src/x.ts'])
   expect(linksOf('/mods ~/a', false)).toEqual([])
+})
+
+test('a link button names what it opens', () => {
+  expect(linkName('https://github.com/a/b?x=1')).toBe('github.com')
+  expect(linkName('src/Service/KnowledgeBase/ShopAssistantTools.php')).toBe('ShopAssistantTools.php')
+  expect(linkName('hooks/')).toBe('hooks')
 })
 
 test('a scene theme draws its animated strip on desktop only', async ($, on) => {
@@ -559,4 +565,40 @@ test('a link opens at the same absolute path its button was checked at', () => {
   expect(absPathOf('~/x/y.md', root, '/h')).toBe('/h/x/y.md')
   expect(absPathOf('/etc/hosts', root, '/h')).toBe('/etc/hosts')
   expect(absPathOf('-x.md', '', '/h')).toBe('./-x.md')
+})
+
+test('a path keeps its :line, split off for opening', () => {
+  expect(linksOf('xem `KnowledgeAnswerer.php:281:5`')).toEqual(['KnowledgeAnswerer.php:281'])
+  expect(lineOf('a/b.php:281')).toEqual({ path: 'a/b.php', line: '281' })
+  expect(lineOf('a/b.php')).toEqual({ path: 'a/b.php', line: '' })
+})
+
+test('a closing question offers its backticked options or the numbered list above it', () => {
+  expect(choicesOf('Xong.\n\nBạn muốn tôi đăng review dạng `--request-changes` hay `--comment`?')).toEqual(['--request-changes', '--comment'])
+  const list = '1. **Nút trả lời nhanh.** Mô tả\n   tiếp\n2. **Mở file đúng dòng.** Mô tả\n\nBạn muốn làm cái nào?'
+  expect(choicesOf(list)).toEqual(['1. Nút trả lời nhanh', '2. Mở file đúng dòng'])
+  expect(choicesOf('Dùng `a` hay `b`.')).toEqual([])
+  expect(choicesOf('Chạy `npm test` trong `src/` không?')).toEqual([])
+  expect(choicesOf('Chọn `a`, `b` hoặc `c`?')).toEqual(['a', 'b', 'c'])
+  expect(choicesOf('Bạn muốn làm gì?')).toEqual([])
+  expect(choicesOf('```\n`a` hay `b`?\n```')).toEqual([])
+})
+
+test('a reply turns into Discord markdown', () => {
+  const md = '#### Chi tiết\n\n| Tên | Giá |\n| --- | --- |\n| **a** | `1` |\n| bb | 22 |\n\n---\n- [ ] làm\n- [x] xong\n![x](https://i.png)\n```\n| keep | me |\n```'
+  expect(discordOf(md)).toBe(
+    '**Chi tiết**\n\n```\nTên  Giá\n---  ---\na    1\nbb   22\n```\n\n- ☐ làm\n- ☑ xong\nhttps://i.png\n```\n| keep | me |\n```',
+  )
+})
+
+test('a PR and its checks read from gh', () => {
+  const json = (rollup: object[], state = 'OPEN') => JSON.stringify({ number: 12, url: 'https://gh/pr/12', state, statusCheckRollup: rollup })
+  const run = prOf(json([{ status: 'IN_PROGRESS', conclusion: '' }, { status: 'COMPLETED', conclusion: 'SUCCESS' }, { state: 'PENDING' }]))
+  expect(run).toEqual({ number: 12, url: 'https://gh/pr/12', total: 3, passed: 1, failed: 0, pending: 2 })
+  expect(prLabel(run!)).toBe('PR #12 ◌ CI 1/3')
+  const bad = prOf(json([{ status: 'COMPLETED', conclusion: 'FAILURE' }, { state: 'SUCCESS' }]))!
+  expect(prLabel(bad)).toBe('PR #12 ✗ CI 1 lỗi')
+  expect(prLabel(prOf(json([{ status: 'COMPLETED', conclusion: 'SKIPPED' }]))!)).toBe('PR #12 ✓ CI')
+  expect(prOf(json([], 'MERGED'))).toBeNull()
+  expect(prOf('no pr')).toBeNull()
 })

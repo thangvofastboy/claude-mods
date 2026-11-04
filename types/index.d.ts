@@ -52,7 +52,9 @@ export type Settings = {
   relatedtest: boolean
   promptlint: boolean
   shadow: boolean
+  prci: boolean
 }
+export type Pr = { number: number; url: string; total: number; passed: number; failed: number; pending: number }
 export type Git = { branch: string; changed: number }
 export type Turn = { tools: number; failed: number; edits: number }
 export type LastTurn = { seconds: number; tools: number; failed: number }
@@ -155,6 +157,7 @@ declare module 'claude-code' {
       budgetLimit: number
       blast: Blast | null
       testFail: string | null
+      pr: Pr | null
       lastAnswer: string
       quotaWarned: string
       // null until the accounts pane first loads.

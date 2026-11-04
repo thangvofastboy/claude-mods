@@ -18,6 +18,7 @@ import type {
   Limit,
   Notice,
   Peer,
+  Pr,
   Settings,
   SplashInfo,
   Step,
@@ -112,6 +113,7 @@ const DEFAULTS: Settings = {
   relatedtest: false,
   promptlint: true,
   shadow: false,
+  prci: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -164,6 +166,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
+  prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong; cần gh',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
   promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
   shadow: 'sau mỗi lượt có sửa file, lưu một commit nháp vào refs/mods/turns (không đụng nhánh, index hay HEAD); xem bằng /mods turns',
@@ -195,7 +198,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   ],
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
   'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock', 'shadow'],
-  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'relatedtest', 'promptlint'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'prci', 'relatedtest', 'promptlint'],
   'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
@@ -256,6 +259,7 @@ const spentToday = atom({ plugin: 'terminal-polish', key: 'spentToday' } as cons
 const budgetLimit = atom({ plugin: 'terminal-polish', key: 'budgetLimit' } as const, 0)
 const blast = atom({ plugin: 'terminal-polish', key: 'blast' } as const, null)
 const testFail = atom({ plugin: 'terminal-polish', key: 'testFail' } as const, null as string | null)
+const pr = atom({ plugin: 'terminal-polish', key: 'pr' } as const, null)
 const lastAnswer = atom({ plugin: 'terminal-polish', key: 'lastAnswer' } as const, '')
 const quotaWarned = atom({ plugin: 'terminal-polish', key: 'quotaWarned' } as const, '')
 
@@ -517,6 +521,67 @@ async function refreshGit($: EngineInterface) {
   }
 }
 
+// The branch's open PR and its checks, from `gh pr view --json number,url,state,statusCheckRollup`.
+export function prOf(json: string): Pr | null {
+  try {
+    const v = JSON.parse(json) as { number?: number; url?: string; state?: string; statusCheckRollup?: Record<string, string>[] }
+    if (v.state !== 'OPEN' || typeof v.number !== 'number') return null
+    const runs = v.statusCheckRollup ?? []
+    const verdict = (c: Record<string, string>) => {
+      const state = (c.conclusion || c.state || '').toUpperCase()
+      if (c.status && c.status !== 'COMPLETED') return 'pending'
+      if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state)) return 'passed'
+      if (['PENDING', 'EXPECTED', 'QUEUED', 'IN_PROGRESS', ''].includes(state)) return 'pending'
+      return 'failed'
+    }
+    const n = (k: string) => runs.filter(c => verdict(c) === k).length
+    return { number: v.number, url: v.url ?? '', total: runs.length, passed: n('passed'), failed: n('failed'), pending: n('pending') }
+  } catch {
+    return null
+  }
+}
+
+// The band's PR segment: ◌ while checks run, then ✓ or ✗.
+export const prLabel = (p: Pr) =>
+  p.total === 0
+    ? `PR #${p.number}`
+    : p.pending > 0
+      ? `PR #${p.number} ◌ CI ${p.passed + p.failed}/${p.total}`
+      : p.failed > 0
+        ? `PR #${p.number} ✗ CI ${p.failed} lỗi`
+        : `PR #${p.number} ✓ CI`
+
+// gh asks GitHub, so once a minute at most, and never on main/master or a repo whose config runs programs.
+// A switched branch asks at once. A gh failure other than "no pull requests found"
+// (offline, rate limit) keeps what the band shows.
+const PR_EVERY_MS = 60_000
+let prNextAt = 0
+let prBranch = ''
+export async function refreshPr($: EngineInterface) {
+  const [now, repo] = await Promise.all([$.clock.now(), read($, git)])
+  const branch = repo?.branch ?? ''
+  if (now < prNextAt && branch === prBranch) return
+  prNextAt = now + PR_EVERY_MS
+  const moved = branch !== prBranch
+  prBranch = branch
+  const [s, dir, before] = await Promise.all([read($, settings), read($, root), read($, pr)])
+  let value: Pr | null = null
+  if (s.prci && branch && !['main', 'master', 'HEAD'].includes(branch) && dir && (await gitIsSafe($, dir))) {
+    const run = await $.process
+      .run(['gh', 'pr', 'view', '--json', 'number,url,state,statusCheckRollup'], { cwd: dir, timeoutMs: 10000 })
+      .catch(() => undefined)
+    value = run?.exitCode === 0 ? prOf(run.stdout) : !moved && run && !/no pull requests? found/i.test(run.stderr) ? before : null
+  }
+  if (same(before, value)) return
+  await update($, pr, () => value)
+  if (before && value && before.number === value.number && before.pending > 0 && value.pending === 0 && value.total > 0) {
+    const text = value.failed > 0 ? `❌ CI của PR #${value.number}: ${value.failed} check lỗi` : `✅ CI của PR #${value.number} pass`
+    void notice($, text)
+    const muted = s.quiet && inQuiet(new Date(now).getHours())
+    if (s.notify && !muted) void $.ui.notify(text, { title: (await read($, project)) || 'Claude' }).catch(() => undefined)
+  }
+}
+
 // session.usage() asks the rate-limit endpoint, which answers 429 when hit once per
 // turn. Skip calls inside the wait; every failure doubles it, a success resets it.
 const USAGE_MIN_MS = 30_000
@@ -731,7 +796,7 @@ export function prDraft(log: string, stat: string) {
 export const codeBlocks = (text: string) =>
   [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map(m => ({ lang: (m[1] ?? '').trim(), code: (m[2] ?? '').replace(/\n$/, '') }))
 
-// Links and paths a reply mentions, outside fenced code. A path counts only in `backticks`, with an extension (file) or a slash (folder); a :line suffix is dropped.
+// Links and paths a reply mentions, outside fenced code. A path counts only in `backticks`, with an extension (file) or a slash (folder); a :line suffix is kept (a :col after it is dropped).
 // `bare` (a typed prompt) also takes unquoted paths: ~/x, or two segments from / ./ ../ so a /command is not one.
 export const linksOf = (text: string, bare = false) => {
   const prose = text.replace(/```[\s\S]*?```/g, '')
@@ -741,10 +806,79 @@ export const linksOf = (text: string, bare = false) => {
       )
     : []
   const urls = [...prose.matchAll(/https?:\/\/[^\s<>()`'"\]]+/g)].map(m => m[0].replace(/[.,;:!?*_]+$/, ''))
-  const files = [...prose.matchAll(/`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]*)*)(?::\d+(?::\d+)?)?`/g)]
-    .map(m => m[1] ?? '')
-    .filter(f => !/^https?:/.test(f) && (f.includes('/') || /[\w-]\.\w+$/.test(f)))
+  const files = [...prose.matchAll(/`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]*)*)(?::(\d+)(?::\d+)?)?`/g)]
+    .filter(m => { const f = m[1] ?? ''; return !/^https?:/.test(f) && (f.includes('/') || /[\w-]\.\w+$/.test(f)) })
+    .map(m => `${m[1] ?? ''}${m[2] ? `:${m[2]}` : ''}`)
   return [...new Set([...urls, ...files, ...typed])].slice(0, 16)
+}
+
+// A link's path and its :line, if any.
+export const lineOf = (l: string) => {
+  const m = /^(.*?):(\d+)$/.exec(l)
+  return m ? { path: m[1] ?? l, line: m[2] ?? '' } : { path: l, line: '' }
+}
+
+// Choices a reply's closing question offers, for one-press answers: the `backticked`
+// options of a last line that asks ("`a` hay `b`?"), else the titles of the numbered
+// list right above a closing question ("1. **Title** …").
+export const choicesOf = (text: string) => {
+  const lines = text.replace(/```[\s\S]*?```/g, '').trimEnd().split('\n')
+  const ask = (lines.pop() ?? '').trim()
+  if (!/\?\s*$/.test(ask)) return []
+  const ticked = [...ask.matchAll(/`([^`\n]{1,60})`/g)].map(m => m[1] ?? '')
+  if (ticked.length >= 2 && /`\s*(?:,|hay|hoặc|or)\s+`/i.test(ask)) return [...new Set(ticked)].slice(0, 4)
+  while (lines.length && !lines[lines.length - 1]?.trim()) lines.pop()
+  const items: string[] = []
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] ?? ''
+    const m = /^(\d+)\.\s+\*\*(.+?)\*\*/.exec(line)
+    if (m) items.unshift(`${m[1]}. ${(m[2] ?? '').replace(/[.:]$/, '')}`)
+    else if (!/^\s+\S/.test(line) && line.trim()) break // an item's indented body is part of the list
+    else if (!line.trim() && items.length === 0) break
+  }
+  return items.length >= 2 ? items.slice(0, 6) : []
+}
+
+// A reply as Discord shows it: no tables (an aligned code block instead), headings up
+// to ###, no rules, ☐/☑ for task boxes, bare URLs for images. Fenced code stays as is.
+export const discordOf = (text: string) =>
+  text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, i) => (i % 2 ? part : discordProse(part)))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+const cellText = (c: string) => c.trim().replace(/\*\*|__|`/g, '')
+function discordProse(text: string) {
+  const out: string[] = []
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? '')) {
+      const rows: string[][] = []
+      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i] ?? ''); i++) {
+        const row = lines[i] ?? ''
+        if (/^\s*\|[\s:|-]+\|\s*$/.test(row)) continue
+        rows.push(row.trim().slice(1, -1).split('|').map(cellText))
+      }
+      i--
+      const widths = rows[0]?.map((_, c) => Math.max(...rows.map(r => (r[c] ?? '').length))) ?? []
+      const fmt = (r: string[]) => widths.map((w, c) => (r[c] ?? '').padEnd(w)).join('  ').trimEnd()
+      out.push('```', ...rows.map((r, n) => (n === 0 ? `${fmt(r)}\n${widths.map(w => '-'.repeat(w)).join('  ')}` : fmt(r))), '```')
+      continue
+    }
+    out.push(
+      line
+        .replace(/^#{4,}\s+(.+)$/, '**$1**')
+        .replace(/^\s*([-*_])(\s*\1){2,}\s*$/, '')
+        .replace(/^(\s*[-*]) \[ \]/, '$1 ☐')
+        .replace(/^(\s*[-*]) \[[xX]\]/, '$1 ☑')
+        .replace(/!\[[^\]]*\]\(([^)\s]+)\)/g, '$1')
+        .replace(/<br\s*\/?>/g, '\n'),
+    )
+  }
+  return out.join('\n')
 }
 
 export const pinText = (answer: string) => {
@@ -796,6 +930,7 @@ export async function pollPanes($: EngineInterface) {
     await Promise.all([
       shown.has(PEERS_PANE) ? syncPeers($) : undefined,
       shown.has(DASH) || agentsLive ? refreshAgents($) : undefined,
+      refreshPr($).catch(() => undefined),
     ])
   } catch {
     // A missed round; the next tick tries again.
@@ -1225,12 +1360,20 @@ elif gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org
 else [ -d "$a" ] || f=$(dirname "$a"); ${OPEN}; fi`
 
 // A URL opens in the browser, a file in the app the desktop picks for it; `reveal` shows a path in the file manager instead.
+// A file with a :line opens in an editor at that line when one is installed (VS Code, Cursor, Zed).
+const AT_LINE = `if command -v code >/dev/null; then code -g "$f:$2"
+elif command -v cursor >/dev/null; then cursor -g "$f:$2"
+elif command -v zed >/dev/null; then (zed "$f:$2" >/dev/null 2>&1 &)
+else ${OPEN}; fi`
+
 export async function openTarget($: EngineInterface, target: string, reveal = false) {
   const url = /^https?:/.test(target)
+  const { path, line } = url ? { path: target, line: '' } : lineOf(target)
   // The same absolute path `openable` checked: the shell's cwd is not trusted to match it.
-  const f = url ? target : await absPath($, target)
-  if (!url && !(await $.fs.exists(f).catch(() => false))) return void notice($, `Không mở được: không tồn tại ${target}`)
-  const run = await $.process.run(['sh', '-c', `f="$1" && ${url || !reveal ? OPEN : REVEAL}`, 'sh', f], { timeoutMs: 10000 })
+  const f = url ? target : await absPath($, path)
+  if (!url && !(await $.fs.exists(f).catch(() => false))) return void notice($, `Không mở được: không tồn tại ${path}`)
+  const script = url ? OPEN : reveal ? REVEAL : line ? AT_LINE : OPEN
+  const run = await $.process.run(['sh', '-c', `f="$1" && ${script}`, 'sh', f, line], { timeoutMs: 10000 })
   if (run.exitCode !== 0) void notice($, `Không mở được: ${run.stderr.trim() || run.exitCode}`)
 }
 
@@ -1240,35 +1383,73 @@ export const absPathOf = (l: string, dir: string, me: string) =>
   l.startsWith('~/') ? `${me}/${l.slice(2)}` : l.startsWith('/') ? l : dir ? `${dir}/${l}` : `./${l}`
 const absPath = async ($: EngineInterface, l: string) => absPathOf(l, await read($, root), await read($, home))
 
-// Whether each path is there, asked once: a reply's `/mods` or `owner/repo` gets no button that can only fail.
+// A bare `name.ext` not at the root: the one tracked file of that name, else nothing.
+async function findTracked($: EngineInterface, dir: string, name: string) {
+  if (!dir || !(await gitIsSafe($, dir))) return ''
+  const run = await $.process.run([...SAFE_GIT, '-C', dir, 'ls-files', '--', `:(glob)**/${name}`], { timeoutMs: 3000 })
+  const hits = run.exitCode === 0 ? run.stdout.split('\n').filter(Boolean) : []
+  return hits.length === 1 ? (hits[0] ?? '') : ''
+}
+
+// Each link as a button opens it, or dropped: a reply's `/mods` or `owner/repo` gets no button that can only fail.
+// A bare file name becomes the one tracked file of that name; a :line stays on it.
 // ponytail: a path missing at first sight stays missing until the cache (500) clears.
-const there = new Map<string, boolean>()
+const there = new Map<string, Promise<string>>()
 export async function openable($: EngineInterface, links: string[]) {
   if (!links.length) return links
-  const ok = await Promise.all(
+  const dir = await read($, root)
+  const got = await Promise.all(
     links.map(async l => {
-      if (/^https?:/.test(l)) return true
-      const p = await absPath($, l)
-      let hit = there.get(p)
+      if (/^https?:/.test(l)) return l
+      const key = `${dir}\0${l}`
+      let hit = there.get(key)
       if (hit === undefined) {
-        hit = await $.fs.exists(p).catch(() => false)
+        const { path, line } = lineOf(l)
+        hit = (async () => {
+          const found = (await $.fs.exists(await absPath($, path)).catch(() => false))
+            ? path
+            : path.includes('/')
+              ? ''
+              : await findTracked($, dir, path).catch(() => '')
+          return found ? `${found}${line ? `:${line}` : ''}` : ''
+        })()
         if (there.size >= 500) there.clear()
-        there.set(p, hit)
+        there.set(key, hit)
       }
       return hit
     }),
   )
-  return links.filter((_, i) => ok[i]).slice(0, 8)
+  return [...new Set(got.filter(Boolean))].slice(0, 8)
 }
 
+// What a link button shows, so the row says which link or path it opens: a URL's host, a path's last name.
+export const linkName = (l: string) =>
+  /^https?:/.test(l) ? (l.match(/^https?:\/\/([^/?#]+)/)?.[1] ?? l) : baseName(l.replace(/\/+$/, '')) || l
+
 // 🔗 opens each link or path; 📂 shows a path in the file manager.
-function linkButtons($: EngineInterface, e: { requestId: string } & Parameters<EngineInterface['ui']['resolve']>[0], P: Palette, links: string[]) {
+// Four or more fold into one `🔗 N link ▾` button until it is pressed.
+const LINKS_FOLD = 4
+function linkButtons(
+  $: EngineInterface,
+  e: { requestId: string } & Parameters<EngineInterface['ui']['resolve']>[0],
+  P: Palette,
+  links: string[],
+  open: string[],
+) {
   const { Box, Button, Text } = $.ui.resolve(e)
+  const id = `links-${e.requestId}`
+  if (links.length >= LINKS_FOLD && !open.includes(id))
+    return [
+      <Button key={id} label={`Hiện ${links.length} link`} plain dimColor onPress={() => void update($, expanded, list => [...list, id].slice(-200))}>
+        <Text color={P.cyan}>🔗</Text>
+        <Text color={P.muted}>{` ${links.length} link ▾ `}</Text>
+      </Button>,
+    ]
   return links.map((l, i) => (
     <Box key={`link-${e.requestId}-${i}`} flexDirection="row" gap={1}>
-      <Button key={`open-${e.requestId}-${i}`} label={baseName(l.replace(/\/+$/, '')) || l} plain dimColor onPress={() => void openTarget($, l)}>
+      <Button key={`open-${e.requestId}-${i}`} label={`Mở ${l}`} plain dimColor onPress={() => void openTarget($, l)}>
         <Text color={P.cyan}>🔗</Text>
-        <Text color={P.muted}> Open </Text>
+        <Text color={P.muted}>{` ${linkName(l)} `}</Text>
       </Button>
       {/^https?:/.test(l) ? null : (
         <Button key={`reveal-${e.requestId}-${i}`} label={`Mở vị trí ${l}`} plain dimColor onPress={() => void openTarget($, l, true)}>
@@ -4064,6 +4245,7 @@ export const register: Register = on => {
       read($, accounts),
       read($, replayCount),
     ])
+    const branchPr = await read($, pr)
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
@@ -4108,6 +4290,8 @@ export const register: Register = on => {
       })
     }
     if (checked) segments.push({ text: `${checked.ok ? '✓' : '✗'} check`, color: checked.ok ? P.ok : P.err })
+    if (s.prci && branchPr)
+      segments.push({ text: prLabel(branchPr), color: branchPr.pending > 0 ? P.warn : branchPr.failed > 0 ? P.err : P.ok })
     const openTodos = todoList.filter(x => !x.done).length
     if (s.todos && openTodos > 0) segments.push({ text: `☐ ${openTodos}`, color: P.violet })
     if (countdown) segments.push({ text: `⏱ ${countdown.left}m`, color: P.warn })
@@ -5361,6 +5545,7 @@ export const register: Register = on => {
     const [live, work] = s.msgactions ? await Promise.all([read($, liveTurn), read($, turn)]) : [null, null]
     const lost = s.msgactions ? await read($, failed) : null
     const links = s.msgactions ? await openable($, linksOf(e.props.text, true)) : []
+    const open = links.length >= LINKS_FOLD ? await read($, expanded) : []
     const liveId = live && live.text === e.props.text ? live.id : undefined
     const icon = (glyph: string, color: string, word: string) => [
       <Text color={color}>{glyph}</Text>,
@@ -5399,7 +5584,7 @@ export const register: Register = on => {
             {icon('📝', P.warn, 'Edit')}
           </Button>
         ) : null}
-        {linkButtons($, e, P, links)}
+        {linkButtons($, e, P, links, open)}
         {liveId ? (
           <Button
             key={`abort-${e.requestId}`}
@@ -5425,19 +5610,49 @@ export const register: Register = on => {
     )
   })
 
-  // Each fenced code block of a reply gets a copy button under the reply.
+  // Each fenced code block of a reply gets a copy button under the reply; a reply long
+// enough to share gets 📋 Linear (markdown as is) and 📋 Discord (`discordOf`).
+const COPY_AS_MIN = 200
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const s = await read($, settings)
     const show = s.msgactions && !e.props.isSummary
     const blocks = show ? codeBlocks(e.props.text) : []
     const links = show ? await openable($, linksOf(e.props.text)) : []
-    if (!blocks.length && !links.length) return next(e)
+    const [open, latest, live] = show
+      ? await Promise.all([read($, expanded), read($, lastAnswer), read($, liveTurn)])
+      : [[], '', null]
+    // Answer buttons only under the latest reply and while no turn runs, where pressing one still makes sense.
+    const text = e.props.text.trim()
+    const choices = show && !live && text && latest.trim().endsWith(text) ? choicesOf(text) : []
+    if (!show || (!blocks.length && !links.length && !choices.length && e.props.text.length < COPY_AS_MIN)) return next(e)
     const [P] = await look($)
     const { Box, Button, Text } = $.ui.resolve(e)
+    const copyAs = async (to: 'Linear' | 'Discord') => {
+      const text = to === 'Discord' ? discordOf(e.props.text) : e.props.text.trim()
+      const copied = await $.ui.copy({ text }).catch(() => undefined)
+      const long = to === 'Discord' && text.length > 2000 ? ` (${text.length} ký tự, Discord giới hạn 2000 mỗi tin)` : ''
+      void notice($, copied?.isCopied ? `✅ Đã sao chép cho ${to}${long}` : '❌ Không sao chép được')
+    }
     return (
       <Box flexDirection="column">
         {await next(e)}
+        {choices.length ? (
+          <Box flexDirection="row" gap={2} marginLeft={2}>
+            {choices.map((c, i) => (
+              <Button key={`pick-${e.requestId}-${i}`} label={`Trả lời: ${c}`} plain onPress={() => void $.prompt.submit({ text: c })}>
+                <Text color={P.accent}>▸</Text>
+                <Text color={P.muted}>{` ${c} `}</Text>
+              </Button>
+            ))}
+          </Box>
+        ) : null}
         <Box flexDirection="row" gap={2} marginLeft={2}>
+          {(e.props.text.length >= COPY_AS_MIN ? (['Linear', 'Discord'] as const) : []).map(to => (
+            <Button key={`as-${to}-${e.requestId}`} label={`Sao chép cho ${to}`} plain dimColor onPress={() => void copyAs(to)}>
+              <Text color={P.cyan}>📋</Text>
+              <Text color={P.muted}>{` ${to} `}</Text>
+            </Button>
+          ))}
           {blocks.map((b, i) => (
             <Button
               key={`code-${e.requestId}-${i}`}
@@ -5450,7 +5665,7 @@ export const register: Register = on => {
               <Text color={P.muted}>{` Copy${b.lang ? ` ${b.lang}` : ''} `}</Text>
             </Button>
           ))}
-          {linkButtons($, e, P, links)}
+          {linkButtons($, e, P, links, open)}
         </Box>
       </Box>
     )
