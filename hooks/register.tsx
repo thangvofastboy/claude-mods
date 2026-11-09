@@ -809,7 +809,7 @@ export const commandsOf = (text: string) =>
         .replace(/```[\s\S]*?```/g, '')
         .split('\n')
         .flatMap(line => {
-          const ask = /(?:chạy|run|gõ|nhập|type|execute)\b/i.test(line.replace(/`[^`]*`/g, ''))
+          const ask = /(?<![\p{L}\p{N}_])(?:chạy|run|gõ|nhập|type|execute)(?![\p{L}\p{N}_])/iu.test(line.replace(/`[^`]*`/g, ''))
           return [...line.matchAll(/`([^`\n]{3,200})`/g)]
             .map(m => (m[1] ?? '').trim())
             .filter(c => /^!\s*\S/.test(c) || (ask && /^[\w./~-]+\s+\S/.test(c)))
@@ -828,8 +828,9 @@ export const ciPrompt = (prNumber: number, runId: number, log: string) =>
   `CI của PR #${prNumber} lỗi (run ${runId}). Đây là log các bước lỗi (\`gh run view ${runId} --log-failed\`, phần cuối):\n\n\`\`\`\n${tailOf(log)}\n\`\`\`\n\nTìm nguyên nhân và sửa.`
 
 // The prompt 💡 Giải thích lỗi sends for a failed Bash call: its output's tail; explain, change nothing.
+// An errored call's output is the stored error text (a string), not the {stdout, stderr} record.
 export const explainPrompt = (output: unknown) => {
-  const o = (output ?? {}) as { stdout?: unknown; stderr?: unknown }
+  const o = (typeof output === 'string' ? { stderr: output } : (output ?? {})) as { stdout?: unknown; stderr?: unknown }
   const text = [o.stderr, o.stdout].filter((x): x is string => typeof x === 'string' && !!x.trim()).join('\n')
   return `Giải thích vì sao lệnh Bash vừa rồi lỗi, ngắn gọn. Chưa sửa gì.${text ? `\n\n\`\`\`\n${tailOf(text, 60, 4000)}\n\`\`\`` : ''}`
 }
@@ -841,6 +842,29 @@ export const bumpFail = (counts: Map<string, number>, command: string) => {
   const n = (counts.get(key) ?? 0) + 1
   counts.set(key, n)
   return n === LOOP_FAILS
+}
+
+// A TurnDuration line's cost: the entry whose turn.complete durationMs is nearest, within 1.5s
+// (the line carries no turn id, and its figure may be measured a few ms apart).
+export const costFor = (costs: Record<string, string>, ms: number) => {
+  let best: string | undefined
+  let gap = 1500
+  for (const [k, v] of Object.entries(costs)) {
+    const d = Math.abs(Number(k) - ms)
+    if (d <= gap) [best, gap] = [v, d]
+  }
+  return best
+}
+
+// The run 🔧 Sửa CI reads: a failed run of the newest commit `gh run list` shows (runs come newest first).
+export const failedRunOf = (json: string) => {
+  try {
+    const runs = JSON.parse(json) as { databaseId?: number; conclusion?: string; headSha?: string }[]
+    const sha = runs[0]?.headSha
+    return runs.find(r => r.headSha === sha && r.conclusion === 'failure')?.databaseId
+  } catch {
+    return undefined
+  }
 }
 
 // What a turn cost, for its TurnDuration line: `18k tok · $0.06`.
@@ -951,18 +975,23 @@ export function outputOf(result: unknown) {
 }
 
 // 🔧 Sửa CI: hands Claude the failed steps' log of the branch's last failed run.
+let fixingCi = false
 async function fixCi($: EngineInterface) {
+  if (fixingCi) return
+  fixingCi = true
+  try {
+    await sendCiLog($)
+  } finally {
+    fixingCi = false
+  }
+}
+async function sendCiLog($: EngineInterface) {
   const [repo, dir, p] = await Promise.all([read($, git), read($, root), read($, pr)])
   if (!repo?.branch || !dir || !p || !(await gitIsSafe($, dir))) return void notice($, '❌ Không đọc được CI')
   const list = await $.process
-    .run(['gh', 'run', 'list', '--branch', repo.branch, '--status', 'failure', '--limit', '1', '--json', 'databaseId'], { cwd: dir, timeoutMs: 10000 })
+    .run(['gh', 'run', 'list', '--branch', repo.branch, '--limit', '20', '--json', 'databaseId,conclusion,headSha'], { cwd: dir, timeoutMs: 10000 })
     .catch(() => undefined)
-  let id: number | undefined
-  try {
-    id = list?.exitCode === 0 ? (JSON.parse(list.stdout) as { databaseId?: number }[])[0]?.databaseId : undefined
-  } catch {
-    id = undefined
-  }
+  const id = list?.exitCode === 0 ? failedRunOf(list.stdout) : undefined
   if (!id) return void notice($, '❌ Không tìm thấy run CI lỗi')
   void notice($, `🔧 Đang lấy log run ${id}…`)
   const log = await $.process.run(['gh', 'run', 'view', String(id), '--log-failed'], { cwd: dir, timeoutMs: 30000 }).catch(() => undefined)
@@ -5828,7 +5857,7 @@ const COPY_AS_MIN = 200
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
     const [[P, s], costs] = await Promise.all([look($), read($, turnCosts)])
-    const cost = costs[String(e.props.durationMs)]
+    const cost = costFor(costs, e.props.durationMs)
     const { Box, Text } = $.ui.resolve(e)
     if (!s.decor)
       return cost ? (

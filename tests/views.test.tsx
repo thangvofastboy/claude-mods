@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { absPathOf, bashLine, bumpFail, changelogOf, ciPrompt, codeBlocks, commandsOf, costLabel, explainPrompt, tailOf, editDiff, linksOf, linkName, lineOf, choicesOf, discordOf, prOf, prLabel, usdOf, vagueHint } from '../hooks/register'
+import { absPathOf, bashLine, bumpFail, changelogOf, ciPrompt, codeBlocks, commandsOf, costFor, costLabel, explainPrompt, failedRunOf, tailOf, editDiff, linksOf, linkName, lineOf, choicesOf, discordOf, prOf, prLabel, usdOf, vagueHint } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -651,4 +651,21 @@ test('costLabel sums all token kinds and drops empty parts', () => {
   expect(costLabel(u, 0.061)).toBe('18k tok · $0.06')
   expect(costLabel(undefined, 0)).toBe('')
   expect(costLabel(undefined, 0.5)).toBe('$0.50')
+})
+
+test('review fixes: gõ asks, string error output, newest failed run, near cost', () => {
+  expect(commandsOf('Gõ `npm run build` rồi Enter.')).toEqual(['npm run build'])
+  expect(commandsOf('Ngõ `x y` nhỏ.')).toEqual([])
+  expect(explainPrompt('Exit code 2\nboom')).toContain('boom')
+  const runs = JSON.stringify([
+    { databaseId: 3, conclusion: 'success', headSha: 'new' },
+    { databaseId: 2, conclusion: 'failure', headSha: 'new' },
+    { databaseId: 1, conclusion: 'failure', headSha: 'old' },
+  ])
+  expect(failedRunOf(runs)).toBe(2)
+  expect(failedRunOf(JSON.stringify([{ databaseId: 1, conclusion: 'failure', headSha: 'old' }, { databaseId: 9, conclusion: 'success', headSha: 'old' }]))).toBe(1)
+  expect(failedRunOf(JSON.stringify([{ databaseId: 5, conclusion: 'success', headSha: 'new' }, { databaseId: 1, conclusion: 'failure', headSha: 'old' }]))).toBe(undefined)
+  expect(failedRunOf('nope')).toBe(undefined)
+  expect(costFor({ '12000': 'a', '30000': 'b' }, 12004)).toBe('a')
+  expect(costFor({ '12000': 'a' }, 20000)).toBe(undefined)
 })
