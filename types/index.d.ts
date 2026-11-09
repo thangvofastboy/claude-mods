@@ -167,6 +167,8 @@ declare module 'claude-code' {
       replayCount: number
       agentStats: AgentStat[]
       replayAt: number
+      looping: string | null
+      turnCosts: Record<string, string>
     }
   }
 }
