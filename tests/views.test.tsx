@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { absPathOf, changelogOf, codeBlocks, editDiff, linksOf, linkName, lineOf, choicesOf, discordOf, prOf, prLabel, usdOf, vagueHint } from '../hooks/register'
+import { absPathOf, bashLine, bumpFail, changelogOf, ciPrompt, codeBlocks, commandsOf, costLabel, explainPrompt, tailOf, editDiff, linksOf, linkName, lineOf, choicesOf, discordOf, prOf, prLabel, usdOf, vagueHint } from '../hooks/register'
 
 const PANE_PROPS = {
   isFocused: false,
@@ -601,4 +601,54 @@ test('a PR and its checks read from gh', () => {
   expect(prLabel(prOf(json([{ status: 'COMPLETED', conclusion: 'SKIPPED' }]))!)).toBe('PR #12 ✓ CI')
   expect(prOf(json([], 'MERGED'))).toBeNull()
   expect(prOf('no pr')).toBeNull()
+})
+
+test('commandsOf picks inline commands the person is asked to run', () => {
+  const text = [
+    'Không có quyền. Gõ `! gcloud auth login` trong prompt.',
+    'Rồi chạy `npm run build` và mở `src/a.ts`.',
+    'Hàm `foo bar` có vấn đề.',
+    '```sh\n`! inside fence`\n```',
+  ].join('\n')
+  expect(commandsOf(text)).toEqual(['! gcloud auth login', 'npm run build'])
+  expect(commandsOf('Xong.')).toEqual([])
+  expect(commandsOf('Lệnh `npm run x` và `foo bar` trong file.')).toEqual([])
+})
+
+test('bashLine puts a command in bash mode once', () => {
+  expect(bashLine('npm run build')).toBe('! npm run build')
+  expect(bashLine('! gcloud auth login')).toBe('! gcloud auth login')
+})
+
+test('tailOf and ciPrompt keep only the end of a long log', () => {
+  const log = Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')
+  const tail = tailOf(log)
+  expect(tail.split('\n').length).toBe(150)
+  expect(tail.endsWith('line 299')).toBe(true)
+  expect(tailOf('x'.repeat(20000)).length).toBe(12000)
+  const text = ciPrompt(12, 345, log)
+  expect(text).toContain('PR #12')
+  expect(text).toContain('gh run view 345 --log-failed')
+  expect(text).not.toContain('line 149\n')
+})
+
+test('explainPrompt carries the failed output, or none', () => {
+  expect(explainPrompt({ stdout: '', stderr: 'boom: not found' })).toContain('boom: not found')
+  expect(explainPrompt(undefined)).not.toContain('```')
+})
+
+test('bumpFail fires once, on the third failure of the same command', () => {
+  const counts = new Map<string, number>()
+  expect(bumpFail(counts, 'npm test')).toBe(false)
+  expect(bumpFail(counts, 'npm  test ')).toBe(false)
+  expect(bumpFail(counts, 'ls')).toBe(false)
+  expect(bumpFail(counts, 'npm test')).toBe(true)
+  expect(bumpFail(counts, 'npm test')).toBe(false)
+})
+
+test('costLabel sums all token kinds and drops empty parts', () => {
+  const u = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 15000, cache_creation_input_tokens: 0 }
+  expect(costLabel(u, 0.061)).toBe('18k tok · $0.06')
+  expect(costLabel(undefined, 0)).toBe('')
+  expect(costLabel(undefined, 0.5)).toBe('$0.50')
 })

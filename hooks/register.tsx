@@ -161,12 +161,12 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   todos: 'gom TODO/FIXME và checklist vào bảng TODO',
   notices: 'thẻ thông báo có màu và viền trên dải trạng thái',
   autoupdate: 'tự cập nhật plugin lên tag mới nhất khi mở Claude (kiểm tra tối đa 6 giờ một lần, chỉ bản cài từ marketplace)',
-  msgactions: 'icon dưới tin nhắn bạn đã gửi: 📋 sao chép, ⭐ lưu vào Prompt nhanh, 🔄 gửi lại khi lượt lỗi, 📝 sửa và 🛑 huỷ (lượt đang chạy); nút sao chép từng code block và 🔗 mở link (trình duyệt) / file (ứng dụng mặc định) dưới câu trả lời',
+  msgactions: 'icon dưới tin nhắn bạn đã gửi: 📋 sao chép, ⭐ lưu vào Prompt nhanh, 🔄 gửi lại khi lượt lỗi, 📝 sửa và 🛑 huỷ (lượt đang chạy); nút sao chép từng code block, 📋 / ▶ lệnh Claude nhờ bạn chạy, 💡 giải thích Bash lỗi và 🔗 mở link (trình duyệt) / file (ứng dụng mặc định) dưới câu trả lời',
   asknotify: 'báo khi Claude hỏi bạn (AskUserQuestion), để bạn làm việc khác',
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
-  prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong; cần gh',
+  prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong, phím 🔧 Sửa CI khi CI lỗi; cần gh',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
   promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
   shadow: 'sau mỗi lượt có sửa file, lưu một commit nháp vào refs/mods/turns (không đụng nhánh, index hay HEAD); xem bằng /mods turns',
@@ -248,6 +248,10 @@ const notes = atom({ plugin: 'terminal-polish', key: 'notes' } as const, [])
 const accounts = atom({ plugin: 'terminal-polish', key: 'accounts' } as const, null)
 const replay = atom({ plugin: 'terminal-polish', key: 'replay' } as const, [])
 const replayCount = atom({ plugin: 'terminal-polish', key: 'replayCount' } as const, 0)
+// The Bash command the running turn keeps failing on, for the band's stop key.
+const looping = atom({ plugin: 'terminal-polish', key: 'looping' } as const, null)
+// What each finished turn cost, keyed by its durationMs (the TurnDuration line carries no turn id).
+const turnCosts = atom({ plugin: 'terminal-polish', key: 'turnCosts' } as const, {})
 const agentStats = atom({ plugin: 'terminal-polish', key: 'agentStats' } as const, [])
 const replayAt = atom({ plugin: 'terminal-polish', key: 'replayAt' } as const, 0)
 const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
@@ -796,6 +800,56 @@ export function prDraft(log: string, stat: string) {
 export const codeBlocks = (text: string) =>
   [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map(m => ({ lang: (m[1] ?? '').trim(), code: (m[2] ?? '').replace(/\n$/, '') }))
 
+// Inline commands a reply asks the person to run (Claude lacks permission): a `! cmd`
+// span, or a spaced `cmd` on a line that says chạy/run/gõ/type. Fenced blocks have their own buttons.
+export const commandsOf = (text: string) =>
+  [
+    ...new Set(
+      text
+        .replace(/```[\s\S]*?```/g, '')
+        .split('\n')
+        .flatMap(line => {
+          const ask = /(?:chạy|run|gõ|nhập|type|execute)\b/i.test(line.replace(/`[^`]*`/g, ''))
+          return [...line.matchAll(/`([^`\n]{3,200})`/g)]
+            .map(m => (m[1] ?? '').trim())
+            .filter(c => /^!\s*\S/.test(c) || (ask && /^[\w./~-]+\s+\S/.test(c)))
+        }),
+    ),
+  ].slice(0, 4)
+
+// What the ▶ button puts in the prompt box: the command in bash mode (`!`).
+export const bashLine = (c: string) => (/^!/.test(c) ? c : `! ${c}`)
+
+// The tail of a long log, so a prompt stays small: the last `lines` lines, at most `chars` characters.
+export const tailOf = (text: string, lines = 150, chars = 12000) => text.trimEnd().split('\n').slice(-lines).join('\n').slice(-chars)
+
+// The prompt the 🔧 Sửa CI key sends: the failed steps' log of the branch's last failed run.
+export const ciPrompt = (prNumber: number, runId: number, log: string) =>
+  `CI của PR #${prNumber} lỗi (run ${runId}). Đây là log các bước lỗi (\`gh run view ${runId} --log-failed\`, phần cuối):\n\n\`\`\`\n${tailOf(log)}\n\`\`\`\n\nTìm nguyên nhân và sửa.`
+
+// The prompt 💡 Giải thích lỗi sends for a failed Bash call: its output's tail; explain, change nothing.
+export const explainPrompt = (output: unknown) => {
+  const o = (output ?? {}) as { stdout?: unknown; stderr?: unknown }
+  const text = [o.stderr, o.stdout].filter((x): x is string => typeof x === 'string' && !!x.trim()).join('\n')
+  return `Giải thích vì sao lệnh Bash vừa rồi lỗi, ngắn gọn. Chưa sửa gì.${text ? `\n\n\`\`\`\n${tailOf(text, 60, 4000)}\n\`\`\`` : ''}`
+}
+
+// Failed runs of each Bash command in the running turn; true once one reaches LOOP_FAILS (once).
+export const LOOP_FAILS = 3
+export const bumpFail = (counts: Map<string, number>, command: string) => {
+  const key = command.trim().replace(/\s+/g, ' ')
+  const n = (counts.get(key) ?? 0) + 1
+  counts.set(key, n)
+  return n === LOOP_FAILS
+}
+
+// What a turn cost, for its TurnDuration line: `18k tok · $0.06`.
+export const costLabel = (usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number } | undefined, usd: number) => {
+  const tok = usage ? usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens : 0
+  const parts = [tok >= 1000 ? `${Math.round(tok / 1000)}k tok` : tok > 0 ? `${tok} tok` : '', usd > 0 ? `$${usd.toFixed(2)}` : '']
+  return parts.filter(Boolean).join(' · ')
+}
+
 // Links and paths a reply mentions, outside fenced code. A path counts only in `backticks`, with an extension (file) or a slash (folder); a :line suffix is kept (a :col after it is dropped).
 // `bare` (a typed prompt) also takes unquoted paths: ~/x, or two segments from / ./ ../ so a /command is not one.
 export const linksOf = (text: string, bare = false) => {
@@ -895,6 +949,29 @@ export function outputOf(result: unknown) {
   }
   return ''
 }
+
+// 🔧 Sửa CI: hands Claude the failed steps' log of the branch's last failed run.
+async function fixCi($: EngineInterface) {
+  const [repo, dir, p] = await Promise.all([read($, git), read($, root), read($, pr)])
+  if (!repo?.branch || !dir || !p || !(await gitIsSafe($, dir))) return void notice($, '❌ Không đọc được CI')
+  const list = await $.process
+    .run(['gh', 'run', 'list', '--branch', repo.branch, '--status', 'failure', '--limit', '1', '--json', 'databaseId'], { cwd: dir, timeoutMs: 10000 })
+    .catch(() => undefined)
+  let id: number | undefined
+  try {
+    id = list?.exitCode === 0 ? (JSON.parse(list.stdout) as { databaseId?: number }[])[0]?.databaseId : undefined
+  } catch {
+    id = undefined
+  }
+  if (!id) return void notice($, '❌ Không tìm thấy run CI lỗi')
+  void notice($, `🔧 Đang lấy log run ${id}…`)
+  const log = await $.process.run(['gh', 'run', 'view', String(id), '--log-failed'], { cwd: dir, timeoutMs: 30000 }).catch(() => undefined)
+  if (!log || log.exitCode !== 0 || !log.stdout.trim()) return void notice($, `❌ Không lấy được log: ${log?.stderr.trim() || 'gh lỗi'}`)
+  await $.prompt.submit({ text: ciPrompt(p.number, id, log.stdout), asUser: true })
+}
+
+// Failed runs per Bash command in the running main turn (loop alert).
+const failCounts = new Map<string, number>()
 
 // The band's failing-test name as last written, so a passing run does not rewrite null.
 let lastFail: string | null = null
@@ -3707,6 +3784,7 @@ export const register: Register = on => {
     // A subagent's turn must not reset the main turn's counters or model pick.
     if (e.agentId) return next(e)
     turnSteps = []
+    failCounts.clear()
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
     const [, , effect, s] = await Promise.all([
@@ -3714,6 +3792,7 @@ export const register: Register = on => {
         update($, turn, () => value),
         update($, liveTurn, () => ({ id: e.turnId, text: e.text })),
         update($, failed, () => null),
+        update($, looping, () => null),
       ]),
       Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       read($, fx),
@@ -4007,6 +4086,10 @@ export const register: Register = on => {
         isEdit && path ? update($, files, list => [path, ...list.filter(f => f !== path)].slice(0, 30)) : undefined,
         read($, settings),
       ])
+      if (e.tool === 'Bash' && !e.agentId && ran.isError === true && ran.deny === undefined && bumpFail(failCounts, e.command)) {
+        await update($, looping, () => e.command)
+        void notice($, `⚠ Claude chạy lỗi cùng một lệnh ${LOOP_FAILS} lần: ${commandLabel(e.command)}. Bấm 🛑 trên dải trạng thái để dừng.`)
+      }
       if (e.tool === 'Bash' && ran.deny === undefined && TEST_COMMAND.test(e.command)) {
         const name = isFailed ? (failName(outputOf(ran.result)) ?? 'test lỗi') : null
         if (name !== lastFail) {
@@ -4082,7 +4165,7 @@ export const register: Register = on => {
         e.reason === 'error' && live ? update($, failed, () => ({ text: live.text })) : undefined,
         update($, last, () => done),
         update($, history, list => [...list, done].slice(-20)),
-        Promise.all([update($, turn, () => null), update($, liveTurn, () => null)]),
+        Promise.all([update($, turn, () => null), update($, liveTurn, () => null), update($, looping, () => null)]),
         Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       ])
       if (e.reason === 'answer' && !e.isAborted) await update($, lastAnswer, () => e.answer)
@@ -4119,6 +4202,9 @@ export const register: Register = on => {
       const before = await read($, lastUsd)
       const spent = use?.usd != null && before != null ? Math.max(0, use.usd - before) : 0
       await update($, lastUsd, () => use?.usd ?? before)
+      const cost = costLabel(e.usage, spent)
+      if (cost)
+        await update($, turnCosts, m => Object.fromEntries([...Object.entries(m), [String(e.durationMs), cost]].slice(-100)))
       const stats = await recordStats($, (await read($, project)) || 'claude', done, spent)
       await Promise.all([refreshHeat($, stats), refreshSpend($, stats)])
       const limit = await read($, budgetLimit)
@@ -4245,7 +4331,7 @@ export const register: Register = on => {
       read($, accounts),
       read($, replayCount),
     ])
-    const branchPr = await read($, pr)
+    const [branchPr, loopCmd] = await Promise.all([read($, pr), read($, looping)])
     const name = projectName || 'claude'
     const pct = use?.percent ?? null
     const limits: Limit[] = s.quota ? (use?.limits ?? []) : []
@@ -4338,6 +4424,19 @@ export const register: Register = on => {
     const keys: [string, string, string, () => unknown][] = [
       ...(stepCount > 0
         ? [['replay', `▶ Replay ${stepCount} `, 'r', () => void openReplay($).catch(() => undefined)] as [string, string, string, () => unknown]]
+        : []),
+      ...(working && loopCmd
+        ? [
+            [
+              'loop',
+              '🛑 Dừng (lặp lỗi) ',
+              'l',
+              () => void read($, liveTurn).then(l => (l ? $.turn.abort({ turnId: l.id }) : undefined)).catch(() => undefined),
+            ] as [string, string, string, () => unknown],
+          ]
+        : []),
+      ...(s.prci && branchPr && branchPr.pending === 0 && branchPr.failed > 0
+        ? [['fixci', '🔧 Sửa CI ', 'f', () => void fixCi($).catch(() => undefined)] as [string, string, string, () => unknown]]
         : []),
       ['sessions', 'Session', 's', () => void openPeers($)],
       ['dash', 'Bảng', 'd', () => void openDash($)],
@@ -5354,6 +5453,30 @@ export const register: Register = on => {
     )
   })
 
+  // 💡 under a failed Bash call, once no turn runs: Claude explains the error, changes nothing.
+  on('ui.render', { component: 'ToolResult', props: { tool: 'Bash' } }, async ($, e, next) => {
+    if (!e.props.isErrored) return next(e)
+    const [s, live] = await Promise.all([read($, settings), read($, liveTurn)])
+    if (!s.msgactions || live) return next(e)
+    const [P] = await look($)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        {await next(e)}
+        <Button
+          key={`explain-${e.props.tool_use_id}`}
+          label="Giải thích lỗi"
+          plain
+          dimColor
+          onPress={() => void $.prompt.submit({ text: explainPrompt(e.props.output), asUser: true }).catch(() => undefined)}
+        >
+          <Text color={P.warn}>💡</Text>
+          <Text color={P.muted}> Giải thích lỗi </Text>
+        </Button>
+      </Box>
+    )
+  })
+
   // Collapse (24): a long Bash output shows its head and a press to open it.
   on('ui.render', { component: 'ToolResult', props: { tool: 'Bash' } }, async ($, e, next) => {
     if (!(await read($, settings)).collapse || e.props.isErrored) return next(e)
@@ -5618,13 +5741,14 @@ const COPY_AS_MIN = 200
     const show = s.msgactions && !e.props.isSummary
     const blocks = show ? codeBlocks(e.props.text) : []
     const links = show ? await openable($, linksOf(e.props.text)) : []
+    const cmds = show ? commandsOf(e.props.text) : []
     const [open, latest, live] = show
       ? await Promise.all([read($, expanded), read($, lastAnswer), read($, liveTurn)])
       : [[], '', null]
     // Answer buttons only under the latest reply and while no turn runs, where pressing one still makes sense.
     const text = e.props.text.trim()
     const choices = show && !live && text && latest.trim().endsWith(text) ? choicesOf(text) : []
-    if (!show || (!blocks.length && !links.length && !choices.length && e.props.text.length < COPY_AS_MIN)) return next(e)
+    if (!show || (!blocks.length && !cmds.length && !links.length && !choices.length && e.props.text.length < COPY_AS_MIN)) return next(e)
     const [P] = await look($)
     const { Box, Button, Text } = $.ui.resolve(e)
     const copyAs = async (to: 'Linear' | 'Discord') => {
@@ -5667,6 +5791,18 @@ const COPY_AS_MIN = 200
           ))}
           {linkButtons($, e, P, links, open)}
         </Box>
+        {cmds.map((c, i) => (
+          <Box key={`cmd-${e.requestId}-${i}`} flexDirection="row" gap={2} marginLeft={2}>
+            <Button label={`Sao chép lệnh ${c}`} plain dimColor onPress={() => void copyText($, c)}>
+              <Text color={P.cyan}>📋</Text>
+              <Text color={P.muted}>{` ${c.length > 60 ? `${c.slice(0, 59)}…` : c} `}</Text>
+            </Button>
+            <Button label={`Điền vào prompt: ${bashLine(c)}`} plain dimColor onPress={() => void $.prompt.fill({ text: bashLine(c) }).catch(() => undefined)}>
+              <Text color={P.ok}>▶</Text>
+              <Text color={P.muted}> Điền </Text>
+            </Button>
+          </Box>
+        ))}
       </Box>
     )
   })
@@ -5691,9 +5827,18 @@ const COPY_AS_MIN = 200
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
-    const [P, s] = await look($)
-    if (!s.decor) return next(e)
-    const { Text } = $.ui.resolve(e)
-    return <Text color={P.muted}>✓ Xong sau {duration(e.props.durationMs)}</Text>
+    const [[P, s], costs] = await Promise.all([look($), read($, turnCosts)])
+    const cost = costs[String(e.props.durationMs)]
+    const { Box, Text } = $.ui.resolve(e)
+    if (!s.decor)
+      return cost ? (
+        <Box flexDirection="row">
+          {await next(e)}
+          <Text color={P.muted}>{` · ${cost}`}</Text>
+        </Box>
+      ) : (
+        next(e)
+      )
+    return <Text color={P.muted}>✓ Xong sau {duration(e.props.durationMs)}{cost ? ` · ${cost}` : ''}</Text>
   })
 }
