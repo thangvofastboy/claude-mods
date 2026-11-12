@@ -613,6 +613,13 @@ test('commandsOf picks inline commands the person is asked to run', () => {
   expect(commandsOf(text)).toEqual(['! gcloud auth login', 'npm run build'])
   expect(commandsOf('Xong.')).toEqual([])
   expect(commandsOf('Lệnh `npm run x` và `foo bar` trong file.')).toEqual([])
+  expect(commandsOf('Chạy ``! git log --format=`%h` -n 3`` nhé')).toEqual(['! git log --format=`%h` -n 3'])
+  const long = `! echo ${'x'.repeat(300)}`
+  expect(commandsOf(`Gõ \`${long}\``)).toEqual([long])
+  expect(commandsOf('Gõ `! a b` và `! a b`, rồi ``! c d``')).toEqual(['! a b', '! c d'])
+  const t0 = performance.now()
+  expect(commandsOf(`Gõ ${'``x `'.repeat(5000)}`)).toEqual([])
+  expect(performance.now() - t0).toBeLessThan(500)
 })
 
 test('bashLine puts a command in bash mode once', () => {

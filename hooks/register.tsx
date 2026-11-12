@@ -802,6 +802,10 @@ export const codeBlocks = (text: string) =>
 
 // Inline commands a reply asks the person to run (Claude lacks permission): a `! cmd`
 // span, or a spaced `cmd` on a line that says chạy/run/gõ/type. Fenced blocks have their own buttons.
+// A code span closes on a run of exactly as many backticks as opened it, so ``a `b` c`` stays whole;
+// the length bound keeps a line with an unclosed backtick from scanning to its end from every start.
+const CODE_SPAN = /(?<!`)(`+)(?!`)(.{1,2000}?)(?<!`)\1(?!`)/g
+const ASK_WORD = /(?<![\p{L}\p{N}_])(?:chạy|run|gõ|nhập|type|execute)(?![\p{L}\p{N}_])/iu
 export const commandsOf = (text: string) =>
   [
     ...new Set(
@@ -809,16 +813,20 @@ export const commandsOf = (text: string) =>
         .replace(/```[\s\S]*?```/g, '')
         .split('\n')
         .flatMap(line => {
-          const ask = /(?<![\p{L}\p{N}_])(?:chạy|run|gõ|nhập|type|execute)(?![\p{L}\p{N}_])/iu.test(line.replace(/`[^`]*`/g, ''))
-          return [...line.matchAll(/`([^`\n]{3,200})`/g)]
-            .map(m => (m[1] ?? '').trim())
-            .filter(c => /^!\s*\S/.test(c) || (ask && /^[\w./~-]+\s+\S/.test(c)))
+          if (!line.includes('`')) return []
+          const ask = ASK_WORD.test(line.replace(CODE_SPAN, ''))
+          return [...line.matchAll(CODE_SPAN)]
+            .map(m => (m[2] ?? '').trim())
+            .filter(c => c.length >= 3 && (/^!\s*\S/.test(c) || (ask && /^[\w./~-]+\s+\S/.test(c))))
         }),
     ),
   ].slice(0, 4)
 
 // What the ▶ button puts in the prompt box: the command in bash mode (`!`).
 export const bashLine = (c: string) => (/^!/.test(c) ? c : `! ${c}`)
+
+// A command cut to fit one button, without splitting an emoji.
+const short = (c: string, max = 60) => (c.length > max ? `${Array.from(c).slice(0, max - 1).join('')}…` : c)
 
 // The tail of a long log, so a prompt stays small: the last `lines` lines, at most `chars` characters.
 export const tailOf = (text: string, lines = 150, chars = 12000) => text.trimEnd().split('\n').slice(-lines).join('\n').slice(-chars)
@@ -5822,11 +5830,11 @@ const COPY_AS_MIN = 200
         </Box>
         {cmds.map((c, i) => (
           <Box key={`cmd-${e.requestId}-${i}`} flexDirection="row" gap={2} marginLeft={2}>
-            <Button label={`Sao chép lệnh ${c}`} plain dimColor onPress={() => void copyText($, c)}>
+            <Button label={`Sao chép lệnh ${short(c)}`} plain dimColor onPress={() => void copyText($, c)}>
               <Text color={P.cyan}>📋</Text>
-              <Text color={P.muted}>{` ${c.length > 60 ? `${c.slice(0, 59)}…` : c} `}</Text>
+              <Text color={P.muted}>{` ${short(c)} `}</Text>
             </Button>
-            <Button label={`Điền vào prompt: ${bashLine(c)}`} plain dimColor onPress={() => void $.prompt.fill({ text: bashLine(c) }).catch(() => undefined)}>
+            <Button label={`Điền vào prompt: ${short(bashLine(c))}`} plain dimColor onPress={() => void $.prompt.fill({ text: bashLine(c) }).catch(() => undefined)}>
               <Text color={P.ok}>▶</Text>
               <Text color={P.muted}> Điền </Text>
             </Button>
