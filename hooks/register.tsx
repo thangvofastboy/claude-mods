@@ -3555,6 +3555,8 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'mods',
+        // Runs mid-turn like built-in commands; the hook defers what must wait for the turn to end.
+        immediate: true,
         description: 'Giao diện và tiện ích: settings, sessions, dash, prompts, stats, find, timer, update…',
         argumentHint:
           'settings | theme | accounts | clear | replay | monitor | turns | changelog | budget | undo | check | commit | todo | note | standup | handoff | copy [n] | context | sessions | dash | prompts | sel | find <x> | stats | abbrev | rule <x> | timer <phút> | version | update | history <x> | pr | pin | quota',
@@ -3647,6 +3649,8 @@ export const register: Register = on => {
   // reads: nothing that changes a setting, the system prompt (rule), prompts
   // (abbrev, save), files (undo, commit), runs a command (check) or sends the
   // conversation elsewhere (handoff).
+  // Changes files, the plugin or (with a name) the account under a running turn.
+  const WAIT_TURN = new Set(['undo', 'update', 'account', 'accounts'])
   const READ_ONLY = new Set([
     '',
     'help',
@@ -3669,6 +3673,9 @@ export const register: Register = on => {
     const word = args.split(/\s+/)[0] ?? ''
     if (!READ_ONLY.has(word) && e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
       return { text: `/mods ${word} chỉ chạy được khi bạn tự gõ.` }
+    }
+    if (WAIT_TURN.has(word) && (!word.startsWith('account') || args !== word) && (await read($, liveTurn))) {
+      return { text: `/mods ${word} sửa file hoặc nạp lại plugin: chờ Claude làm xong lượt này rồi gõ lại.` }
     }
     switch (word) {
       case 'sessions':

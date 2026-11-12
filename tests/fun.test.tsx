@@ -40,3 +40,16 @@ test('a joke rides beside the spinner, and fun turns it off', async ($, on) => {
   expect((await mods('fun')).text).toContain('TẮT')
   expect(await line()).toBe('Đang nghĩ')
 })
+
+test('mid-turn /mods runs at once but holds back undo and update', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: DAY })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  await $.turn.start({ turnId: 't1', text: 'việc dài' } as never)
+  const mods = (args: string) =>
+    $.command.run({ command: 'mods', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  expect((await mods('undo')).text).toContain('chờ Claude làm xong')
+  expect((await mods('update')).text).toContain('chờ Claude làm xong')
+  expect((await mods('accounts bob')).text).toContain('chờ Claude làm xong')
+  expect((await mods('fun')).text).toContain('TẮT')
+})
