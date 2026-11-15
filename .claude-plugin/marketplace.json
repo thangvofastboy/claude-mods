@@ -24,6 +24,16 @@
       },
       "version": "0.1.4",
       "description": "/tutien: mini game tu tiên 33 bậc tính theo token đã dùng, có bảng xếp hạng, tông môn và trang web"
+    },
+    {
+      "name": "desktop-themes",
+      "source": {
+        "source": "github",
+        "repo": "thangvofastboy/claude-desktop-theme",
+        "ref": "v0.3.0"
+      },
+      "version": "0.3.0",
+      "description": "/desktop-theme: theme cho app Claude desktop và mobile (vietnam có bản đồ Hoàng Sa, Trường Sa; taiji; dongson trống đồng; halong)"
     }
   ]
 }
