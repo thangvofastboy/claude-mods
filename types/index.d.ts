@@ -53,6 +53,7 @@ export type Settings = {
   promptlint: boolean
   shadow: boolean
   prci: boolean
+  crew: boolean
 }
 export type Pr = { number: number; url: string; total: number; passed: number; failed: number; pending: number }
 export type Git = { branch: string; changed: number }
@@ -72,6 +73,20 @@ export type Found = { role: 'user' | 'assistant'; snippet: string }
 export type TimerState = { endsAt: number; left: number }
 export type Peer = { id: string; name: string; cwd: string; status: string; isSelf: boolean }
 export type Agent = { id: string; label: string; status: string; type: string; parentId?: string }
+// What `$.agent.list()` says an agent is doing now, polled for the monitor pane.
+export type AgentLive = {
+  id: string
+  model: string
+  effort: string
+  startTime: number
+  tokens: number
+  ctx: number
+  samples: number[]
+  usd: number
+  doing: string
+  // First poll that saw it stopped: AgentInfo has no end time.
+  endTime?: number
+}
 export type Diff = { path: string; text: string; note: string }
 export type Call = { id: string; tool: string; label: string; state: 'run' | 'ok' | 'fail'; ms?: number }
 export type Checkpoint = { id: number; path: string; copy: string | null; at: number }
@@ -166,6 +181,7 @@ declare module 'claude-code' {
       replay: Step[]
       replayCount: number
       agentStats: AgentStat[]
+      agentLive: AgentLive[]
       replayAt: number
       looping: string | null
       turnCosts: Record<string, string>

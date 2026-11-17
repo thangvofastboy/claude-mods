@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { AgentSpawnInput, EngineInterface, Next, Register, Timer } from 'claude-code'
 
 import type {
   Account,
   Agent,
+  AgentLive,
   AgentStat,
   Blast,
   Breakdown,
@@ -114,6 +115,7 @@ const DEFAULTS: Settings = {
   promptlint: true,
   shadow: false,
   prci: true,
+  crew: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -166,6 +168,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
+  crew: 'tự mở AI monitor (danh sách agent chạy hoạt hình) khi có từ 2 subagent chạy cùng lúc',
   prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong, phím 🔧 Sửa CI khi CI lỗi; cần gh',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
   promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
@@ -198,7 +201,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   ],
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
   'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock', 'shadow'],
-  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'prci', 'relatedtest', 'promptlint'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'prci', 'crew', 'relatedtest', 'promptlint'],
   'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
@@ -253,6 +256,7 @@ const looping = atom({ plugin: 'terminal-polish', key: 'looping' } as const, nul
 // What each finished turn cost, keyed by its durationMs (the TurnDuration line carries no turn id).
 const turnCosts = atom({ plugin: 'terminal-polish', key: 'turnCosts' } as const, {})
 const agentStats = atom({ plugin: 'terminal-polish', key: 'agentStats' } as const, [])
+const agentLive = atom({ plugin: 'terminal-polish', key: 'agentLive' } as const, [])
 const replayAt = atom({ plugin: 'terminal-polish', key: 'replayAt' } as const, 0)
 const commitDraft = atom({ plugin: 'terminal-polish', key: 'commitDraft' } as const, null)
 const check = atom({ plugin: 'terminal-polish', key: 'check' } as const, null)
@@ -680,9 +684,8 @@ let agentsLive = false
 
 async function refreshAgents($: EngineInterface) {
   try {
-    const found: Agent[] = (await $.agent.list())
-      .slice(-50)
-      .map(a => ({
+    const listed = (await $.agent.list()).slice(-50)
+    const found: Agent[] = listed.map(a => ({
         id: a.id,
         label: a.description || a.name || a.type,
         status: a.status,
@@ -690,17 +693,137 @@ async function refreshAgents($: EngineInterface) {
         ...(a.parentId ? { parentId: a.parentId } : {}),
       }))
     agentsLive = agentSummary(found).running > 0
+    if (!agentsLive) crewOpened = false
     if (!same(await read($, agents), found)) await update($, agents, () => found)
+    const prev = new Map((await read($, agentLive)).map(l => [l.id, l.endTime]))
+    const now = found.some(a => !isRunning(a.status)) ? await $.clock.now() : 0
+    const live = listed.map(a => liveOf(a, isRunning(a.status) ? undefined : (prev.get(a.id) ?? now)))
+    if (!same(await read($, agentLive), live)) await update($, agentLive, () => live)
   } catch {
     // No agents noun answer: leave the last list.
   }
+}
+
+// The monitor opened itself for this burst of agents; a close sticks until none run.
+let crewOpened = false
+
+type AgentListed = Awaited<ReturnType<EngineInterface['agent']['list']>>[number]
+export const isRunning = (status: string) => status === 'running' || status === 'pending' || status === 'waiting'
+
+export function liveOf(a: AgentListed, endTime?: number): AgentLive {
+  return {
+    id: a.id,
+    model: a.model ?? '',
+    effort: a.effort === undefined ? '' : String(a.effort),
+    startTime: a.startTime,
+    tokens: a.tokenCount,
+    ctx: a.contextWindowSize ?? 0,
+    samples: (a.tokenSamples ?? []).slice(-8),
+    usd: a.cost?.usd ?? 0,
+    doing: ((a.label ?? '').split('\n').find(l => l.trim()) ?? '').trim(),
+    ...(endTime ? { endTime } : {}),
+  }
+}
+
+// Tokens a second over the last two samples (about five seconds apart).
+export function tokenRate(samples: number[]) {
+  const [a, b] = samples.slice(-2)
+  return a === undefined || b === undefined ? 0 : Math.max(0, b - a) / 5
+}
+
+// Token growth between samples as bars, so a busy agent shows a rising line.
+export function spark8(samples: number[]) {
+  const steps = samples.slice(1).map((v, i) => Math.max(0, v - (samples[i] ?? v)))
+  const top = Math.max(1, ...steps)
+  return steps.map(d => BARS[Math.min(7, Math.round((d / top) * 7))] ?? '').join('')
+}
+
+// ---- Crew lanes: one Raster row per running agent, a comet whose speed is its token rate.
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+const CREW_TAG = 14
+const CREW_MS = 90
+const CREW_MAX = 12
+export type CrewLane = { tag: string; color: string; rate: number }
+
+export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
+  const dim = hexNum(P.muted)
+  const track = Math.max(4, width - CREW_TAG - 3)
+  const cells: (readonly [number, number, number])[] = []
+  lanes.forEach((lane, row) => {
+    const color = hexNum(lane.color)
+    const tail = [0, 1, 2, 3, 4, 5].map(d => hexNum(colorAt([lane.color, P.muted], d / 6)))
+    cells.push([SPIN.codePointAt((tick + row) % SPIN.length) ?? 0x20, color, DEFAULT_COLOR], [0x20, dim, DEFAULT_COLOR])
+    // Model text never reaches a cell: printable ASCII only, padded to the tag width.
+    const tag = lane.tag.replace(/[^ -~]/g, '?').slice(0, CREW_TAG).padEnd(CREW_TAG + 1)
+    for (const ch of tag) cells.push([ch.charCodeAt(0), color, DEFAULT_COLOR])
+    const speed = 0.25 + Math.min(1, lane.rate / 150) * 1.25
+    const span = 2 * (track - 1)
+    const pos = (tick * speed + row * 5) % span
+    const head = Math.min(track - 1, Math.round(pos < track ? pos : span - pos))
+    const back = pos < track ? -1 : 1
+    for (let i = 0; i < track; i++) {
+      const d = (i - head) * back
+      if (i === head) cells.push([0x25cf, color, DEFAULT_COLOR])
+      else if (d > 0 && d < 6) cells.push([0x2501, tail[d] ?? dim, DEFAULT_COLOR])
+      else cells.push([0x2500, dim, DEFAULT_COLOR])
+    }
+  })
+  return packCells(cells)
+}
+
+let crewLanes: CrewLane[] = []
+let crewWidth = 0
+let crewTick = 0
+let crewTimer: Timer | null = null
+let crewP: { muted: string } = { muted: '#5c5c5c' }
+
+function stopCrew() {
+  crewTimer?.cancel()
+  crewTimer = null
+}
+
+// Runs only while the monitor is in front, animation is on and an agent runs.
+function syncCrew($: EngineInterface, shown: boolean, anim: boolean) {
+  if (!shown || !anim || crewLanes.length === 0) return stopCrew()
+  if (crewTimer) return
+  crewTimer = $.clock.every(CREW_MS, () => {
+    crewTick += 1
+    if (crewLanes.length === 0 || crewWidth < 1) return
+    void $.ui
+      .blit({ requestId: MONITOR_PANE, key: 'crew', cells: crewFrame(crewLanes, crewTick, crewWidth, crewP) })
+      .catch(() => undefined)
+  })
+}
+
+// Auto model for a subagent Claude left the model out of.
+async function spawnWithPlan(
+  $: EngineInterface,
+  e: AgentSpawnInput,
+  next: Next<'agent.spawn'>,
+) {
+  if (e.fork || e.isTeammate || e.resume || !(await read($, settings)).automodel) return next(e)
+  // A model Claude chose keeps its own effort: the plan's would not fit it.
+  if (e.model !== undefined) return next(e)
+  const plan = agentPlan(e.subagentType, e.description)
+  const ran = await next({ ...e, model: plan.model })
+  if ('agentId' in ran && typeof ran.agentId === 'string') rememberEffort(ran.agentId, plan.effort)
+  return ran
+}
+
+// Two or more agents at once: show the monitor, once per burst.
+async function openCrew($: EngineInterface) {
+  await refreshAgents($)
+  if (crewOpened || !(await read($, settings)).crew) return
+  if (agentSummary(await read($, agents)).running < 2) return
+  crewOpened = true
+  await openMonitor($)
 }
 
 // Counts over every agent the session has run, not only the rows drawn.
 export function agentSummary(list: { status: string }[]) {
   const count = (...words: string[]) => list.filter(a => words.includes(a.status)).length
   return {
-    running: count('running', 'pending', 'waiting'),
+    running: list.filter(a => isRunning(a.status)).length,
     done: count('completed'),
     failed: count('failed', 'killed'),
     total: list.length,
@@ -1043,9 +1166,11 @@ export async function pollPanes($: EngineInterface) {
     const shown = new Set((await $.ui.panes()).filter(p => p.isShown).map(p => p.id))
     await Promise.all([
       shown.has(PEERS_PANE) ? syncPeers($) : undefined,
-      shown.has(DASH) || agentsLive ? refreshAgents($) : undefined,
+      shown.has(DASH) || shown.has(MONITOR_PANE) || agentsLive ? refreshAgents($) : undefined,
       refreshPr($).catch(() => undefined),
     ])
+    const anim = shown.has(MONITOR_PANE) && (await read($, settings)).anim === true
+    syncCrew($, shown.has(MONITOR_PANE), anim)
   } catch {
     // A missed round; the next tick tries again.
   } finally {
@@ -3510,7 +3635,7 @@ async function helpText($: EngineInterface) {
     `  theme <x> bảng màu: ${Object.keys(THEMES).join(' | ')}`,
     '  clear     xoá nội dung đang gõ trong ô nhập',
     '  replay    xem lại từng file Claude sửa ở lượt vừa xong, từng diff một',
-    '  monitor   AI monitor: agent đang chạy, model, effort, thời gian, context, token, ≈ tiền',
+    '  monitor   AI monitor: agent đang chạy (hoạt hình), model, effort, thời gian, token, việc đang làm, ≈ tiền',
     '  turns     các commit nháp theo lượt (bật /mods shadow)',
     '  changelog [write]  changelog hôm nay từ commit; write ghi vào CHANGELOG.md',
     '  accounts [x] tài khoản Claude (cần claude-swap): thêm, xoá, đổi nhanh; có x thì đổi sang x',
@@ -3889,12 +4014,8 @@ export const register: Register = on => {
   // fork or teammate keeps its parent's, a resumed run keeps its own.
   on('agent.spawn', async ($, e, next) => {
     agentsLive = true
-    if (e.fork || e.isTeammate || e.resume || !(await read($, settings)).automodel) return next(e)
-    // A model Claude chose keeps its own effort: the plan's would not fit it.
-    if (e.model !== undefined) return next(e)
-    const plan = agentPlan(e.subagentType, e.description)
-    const ran = await next({ ...e, model: plan.model })
-    if ('agentId' in ran && typeof ran.agentId === 'string') rememberEffort(ran.agentId, plan.effort)
+    const ran = await spawnWithPlan($, e, next)
+    if (!('deny' in ran)) void openCrew($).catch(() => undefined)
     return ran
   })
 
@@ -5198,46 +5319,118 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: MONITOR_PANE }, async ($, e) => {
-    const P = await palette($)
-    const { Box, Text } = $.ui.resolve(e)
-    const [rows, live, use, now] = await Promise.all([read($, agentStats), read($, agents), read($, usage), $.clock.now()])
-    if (rows.length === 0) return <Text color={P.muted}>Chưa có phản hồi nào của model trong session này.</Text>
-    const byId = new Map(live.map(a => [a.id, a]))
-    const running = live.filter(a => a.status === 'running' || a.status === 'pending' || a.status === 'waiting').length
+    const [P, s] = await look($)
+    const t = $.ui.resolve(e)
+    const { Box, Text } = t
+    const Raster = 'Raster' in t ? t.Raster : undefined
+    const [rows, list, live, use, now, mainTurn] = await Promise.all([
+      read($, agentStats),
+      read($, agents),
+      read($, agentLive),
+      read($, usage),
+      $.clock.now(),
+      read($, turn),
+    ])
+    const stat = new Map(rows.map(r => [r.id, r]))
+    const liveBy = new Map(live.map(l => [l.id, l]))
+    const known = new Set(list.map(a => a.id))
+    const running = list.filter(a => isRunning(a.status))
+    const subs = [...running, ...list.filter(a => !isRunning(a.status)).reverse()]
+    const gone = rows.filter(r => r.id !== 'main' && !known.has(r.id))
+    const main = stat.get('main')
+    if (!main && subs.length === 0 && gone.length === 0) {
+      crewLanes = []
+      return <Text color={P.muted}>Chưa có agent hay phản hồi nào của model trong session này.</Text>
+    }
     const total = rows.reduce((sum, r) => sum + r.usd, 0)
-    const sorted = [...rows].sort((a, b) => (a.id === 'main' ? -1 : b.id === 'main' ? 1 : b.lastAt - a.lastAt))
+    const hues = [P.accent, P.violet, P.cyan, P.ok, P.pink, P.info, P.warn]
+    // Spawn order, so an agent keeps its number and color when others finish.
+    const numOf = new Map(list.map((a, i) => [a.id, i + 1]))
+    const hueOf = new Map(list.map((a, i) => [a.id, hues[i % hues.length] ?? P.accent]))
+    const width = Math.max(20, Math.min(e.props.bodyColumns ?? 60, 72))
+    const lanes = running.slice(0, CREW_MAX).map(a => ({
+      tag: `#${numOf.get(a.id)} ${a.type}`,
+      color: hueOf.get(a.id) ?? P.accent,
+      rate: tokenRate(liveBy.get(a.id)?.samples ?? []),
+    }))
+    const animate = s.anim && Raster !== undefined && lanes.length > 0
+    crewLanes = animate ? lanes : []
+    crewWidth = width
+    crewP = { muted: P.muted }
+    const spin = SPIN[Math.floor(now / CREW_MS) % SPIN.length] ?? '●'
+
+    const card = (id: string, a: Agent | undefined, r: AgentStat | undefined) => {
+      const l = liveBy.get(id)
+      const busy = id === 'main' ? mainTurn !== null : a ? isRunning(a.status) : false
+      const hue = id === 'main' ? P.accent : busy ? (hueOf.get(id) ?? P.accent) : P.muted
+      const n = numOf.get(id)
+      const name = id === 'main' ? 'Main' : `${n ? `#${n} ` : ''}${a ? `${a.type} · ${a.label}` : id.slice(0, 8)}`
+      const status = id === 'main' ? '' : a ? (AGENT_STATUS[a.status] ?? a.status) : 'xong'
+      const statusColor = !a ? P.muted : busy ? P.warn : a.status === 'completed' ? P.ok : a.status === 'idle' ? P.muted : P.err
+      const icon = busy ? spin : a?.status === 'completed' || !a ? '✓' : a.status === 'idle' ? '○' : '✗'
+      const start = l?.startTime || r?.startedAt || 0
+      const end = busy ? now : (l?.endTime ?? r?.lastAt ?? 0)
+      const model = l?.model || r?.model || ''
+      const effort = l?.effort || r?.effort || ''
+      const tokens = l?.tokens ?? 0
+      // tokenCount adds every output, so the fill is the last prompt's size.
+      const ctx = l?.ctx && r?.context ? ` · ${Math.min(100, Math.round((r.context / l.ctx) * 100))}% ctx` : ''
+      const usd = l?.usd || r?.usd || 0
+      const meta = [
+        model ? shortModel(model) : '',
+        effort,
+        start && end > start ? duration(end - start) : '',
+        tokens ? `${tok(tokens)} tok${ctx}` : '',
+        r ? `${r.steps} lần gọi` : '',
+        usd ? `≈ $${usd.toFixed(3)}` : '',
+      ].filter(Boolean)
+      const spark = l && busy ? spark8(l.samples) : ''
+      return (
+        <Box key={`mon-${id}`} flexDirection="column" marginTop={1}>
+          <Box flexDirection="row" gap={1}>
+            <Text color={busy ? hue : statusColor}>{icon}</Text>
+            <Text color={busy || id === 'main' ? hue : P.muted} bold wrap="truncate-end">
+              {a?.parentId ? `↳ ${name}` : name}
+            </Text>
+            <Text color={statusColor}>{status}</Text>
+          </Box>
+          {meta.length || spark ? (
+            <Box flexDirection="row" gap={1}>
+              <Text color={P.muted} wrap="wrap">{`  ${meta.join(' · ')}`}</Text>
+              {spark ? <Text color={hue}>{spark}</Text> : null}
+            </Box>
+          ) : null}
+          {busy && l?.doing && l.doing !== a?.label ? (
+            <Text color={P.info} wrap="truncate-end">{`  ⤷ ${l.doing}`}</Text>
+          ) : null}
+          {r ? (
+            <Text color={P.muted} wrap="truncate-end">
+              {`  ctx ${tok(r.context)} · in ${tok(r.input)} · out ${tok(r.output)} · cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}
+            </Text>
+          ) : null}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row" gap={2} flexWrap="wrap">
-          <Text color={P.accent} bold>{`🤖 ${running} agent đang chạy`}</Text>
-          <Text color={P.muted}>{`${rows.length - (rows.some(r => r.id === 'main') ? 1 : 0)} agent trong session`}</Text>
+          <Text color={P.accent} bold>{`🤖 ${running.length} agent đang chạy`}</Text>
+          <Text color={P.muted}>{`${subs.length + gone.length} agent trong session`}</Text>
           <Text color={P.warn}>{`≈ $${total.toFixed(2)} ước tính`}</Text>
           {use?.usd != null ? <Text color={P.ok}>{`session thật: $${use.usd.toFixed(2)}`}</Text> : null}
         </Box>
-        {sorted.map(r => {
-          const info = byId.get(r.id)
-          const isLive = r.id === 'main' || (info ? ['running', 'pending', 'waiting'].includes(info.status) : false)
-          const name = r.id === 'main' ? 'Main' : (info?.label ?? r.id.slice(0, 8))
-          const ms = (isLive && r.id !== 'main' ? now : r.lastAt) - r.startedAt
-          return (
-            <Box key={`mon-${r.id}`} flexDirection="column" marginTop={1}>
-              <Box flexDirection="row" gap={1}>
-                <Text color={isLive ? P.ok : P.muted}>{isLive ? '●' : '○'}</Text>
-                <Text color={r.id === 'main' ? P.accent : P.violet} bold wrap="truncate-end">
-                  {name}
-                </Text>
-                <Text color={P.muted}>{info?.status ?? (r.id === 'main' ? '' : 'xong')}</Text>
-              </Box>
-              <Text color={P.muted} wrap="wrap">
-                {`  ${shortModel(r.model)}${r.effort ? ` · ${r.effort}` : ''} · ${duration(Math.max(0, ms))} · ${r.steps} lần gọi`}
-              </Text>
-              <Text wrap="wrap">
-                {`  ctx ${tok(r.context)} · in ${tok(r.input)} · out ${tok(r.output)} · cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)} · ≈ $${r.usd.toFixed(3)}`}
-              </Text>
-            </Box>
-          )
-        })}
+        {animate && Raster ? (
+          <Box marginTop={1}>
+            <Raster key="crew" columns={width} rows={lanes.length} cells={crewFrame(lanes, crewTick, width, crewP)} />
+          </Box>
+        ) : null}
+        {running.length > CREW_MAX && animate ? (
+          <Text color={P.muted}>{`  … và ${running.length - CREW_MAX} agent nữa đang chạy`}</Text>
+        ) : null}
+        {main ? card('main', undefined, main) : null}
+        {subs.map(a => card(a.id, a, stat.get(a.id)))}
+        {gone.map(r => card(r.id, undefined, r))}
       </Box>
     )
   })
