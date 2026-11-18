@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { agentSummary, crewFrame, liveOf, spark8, tokenRate } from '../hooks/register'
+import { agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate } from '../hooks/register'
 
 test('agent counts group the statuses the pane and band show', () => {
   const list = ['running', 'pending', 'waiting', 'idle', 'completed', 'completed', 'failed', 'killed'].map(status => ({
@@ -57,8 +57,10 @@ test('a crew frame fills one row per lane and keeps model text out of the cells'
   expect(words.length).toBe(2 * 40 * 3)
   const glyphs = Array.from({ length: words.length / 3 }, (_, i) => words[i * 3] ?? 0)
   expect(glyphs.every(g => g >= 0x20 && g <= 0xffff && g !== 0x1f680)).toBe(true)
-  const row2 = String.fromCharCode(...glyphs.slice(40, 40 + 17))
-  expect(row2.slice(2)).toBe('#2 t?m ??      ')
+  const row2 = String.fromCharCode(...glyphs.slice(40, 40 + 23))
+  expect(row2.slice(2)).toBe('#2 t?m ??'.padEnd(21))
+  // A pane narrower than the tag still gives rows of exactly its width.
+  expect(atob(crewFrame(lanes, 0, 20, { muted: '#5c5c5c' })).length).toBe(2 * 20 * 12)
   // Every lane shows its comet head once.
   expect(glyphs.slice(0, 40).filter(g => g === 0x25cf).length).toBe(1)
   expect(glyphs.slice(40).filter(g => g === 0x25cf).length).toBe(1)
@@ -94,8 +96,8 @@ test('two agents at once open the monitor, once per burst', async ($, on) => {
   })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
   expect(texts).toContain('3 agent đang chạy')
-  expect(texts).toContain('#2 Explore · task a2')
-  expect(texts).toContain('haiku-5-5 · low')
+  expect(texts).toContain('#2 Dương Quá')
+  expect(texts).toContain('◆ haiku-5-5')
   expect(texts).toContain('20.0k tok')
   expect(texts).not.toContain('% ctx')
   expect(texts).toContain('⤷ Đang đọc a3.ts')
@@ -121,9 +123,27 @@ test('two agents at once open the monitor, once per burst', async ($, on) => {
   await clock.advance(60_000)
   const later = await shot()
   expect(later.join('\n')).toContain('2 agent đang chạy')
-  expect(later.join('\n')).toContain('#2 Explore · task a2')
-  expect(later.join('\n')).toContain('#3 Explore · task a3')
-  const a1Meta = (lines: string[]) => lines[lines.findIndex(l => l.includes('task a1')) + 2]
-  expect(a1Meta(first)).toContain('haiku-5-5 · low · ')
+  expect(later.join('\n')).toContain('#2 Dương Quá')
+  expect(later.join('\n')).toContain('#3 Tiểu Long Nữ')
+  // The figures of a1, from its icon line to the next card: a done agent's time stops.
+  const a1Meta = (lines: string[]) => {
+    const from = lines.findIndex(l => l.includes('task a1'))
+    const rest = lines.slice(from + 1)
+    return rest.slice(0, rest.findIndex(l => l.startsWith('#'))).filter(l => /^[◆⚡⏱]/.test(l)).join(' ')
+  }
+  expect(a1Meta(first)).toContain('◆ haiku-5-5 ⚡ low')
   expect(a1Meta(later)).toBe(a1Meta(first))
+})
+
+test('subagents take hero names by spawn order, with moves and type icons', () => {
+  expect(heroName(1)).toBe('Lệnh Hồ Xung')
+  expect(heroName(21)).toBe('Lệnh Hồ Xung 2')
+  expect(ascii('Độc Cô Cầu Bại')).toBe('Doc Co Cau Bai')
+  expect(['Độc Cô Cửu Kiếm', 'Hấp Tinh Đại Pháp', 'Phá Kiếm Thức']).toContain(heroMove(1, 'Read a.ts'))
+  expect(heroMove(1, 'Read a.ts')).toBe(heroMove(1, 'Read a.ts'))
+  expect(agentIcon('Explore')).toBe('🔍')
+  expect(agentIcon('terminal-polish:tester')).toBe('🧪')
+  expect(agentIcon('general-purpose')).toBe('⚔')
+  expect(agentIcon('quick-suite')).toBe('⚔')
+  expect(agentIcon('ui-ux-pro')).toBe('🎨')
 })

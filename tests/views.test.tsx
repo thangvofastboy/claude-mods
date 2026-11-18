@@ -506,7 +506,7 @@ test('the AI monitor shows each agent loop with model, effort, tokens and cost',
   })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
   expect(texts).toContain('Main')
-  expect(texts).toContain('sonnet-5-5 · medium')
+  expect(texts).toContain('◆ sonnet-5-5')
   expect(texts).toContain('2 lần gọi')
   expect(texts).toContain('ctx 3.0k')
   await ui.unmount()

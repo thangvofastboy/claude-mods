@@ -738,23 +738,75 @@ export function spark8(samples: number[]) {
   return steps.map(d => BARS[Math.min(7, Math.round((d / top) * 7))] ?? '').join('')
 }
 
+// Each subagent takes a kiếm hiệp / tu tiên name by spawn order; past the list a round number follows.
+const HEROES: readonly (readonly [string, readonly string[]])[] = [
+  ['Lệnh Hồ Xung', ['Độc Cô Cửu Kiếm', 'Hấp Tinh Đại Pháp', 'Phá Kiếm Thức']],
+  ['Dương Quá', ['Ảm Nhiên Tiêu Hồn Chưởng', 'Huyền Thiết Trọng Kiếm', 'Ngọc Nữ Tố Tâm Kiếm']],
+  ['Tiểu Long Nữ', ['Ngọc Nữ Tâm Kinh', 'Thiên La Địa Võng', 'Song Thủ Hỗ Bác']],
+  ['Quách Tĩnh', ['Hàng Long Thập Bát Chưởng', 'Cửu Âm Chân Kinh', 'Song Thủ Hỗ Bác']],
+  ['Hoàng Dung', ['Đả Cẩu Bổng Pháp', 'Lạc Anh Thần Kiếm Chưởng', 'Lan Hoa Phất Huyệt Thủ']],
+  ['Trương Vô Kỵ', ['Cửu Dương Thần Công', 'Càn Khôn Đại Na Di', 'Thái Cực Kiếm']],
+  ['Kiều Phong', ['Hàng Long Thập Bát Chưởng', 'Đả Cẩu Bổng Pháp', 'Cầm Long Công']],
+  ['Đoàn Dự', ['Lục Mạch Thần Kiếm', 'Lăng Ba Vi Bộ', 'Bắc Minh Thần Công']],
+  ['Hư Trúc', ['Thiên Sơn Chiết Mai Thủ', 'Sinh Tử Phù', 'Bắc Minh Thần Công']],
+  ['Phong Thanh Dương', ['Độc Cô Cửu Kiếm', 'Vô Chiêu Thắng Hữu Chiêu']],
+  ['Độc Cô Cầu Bại', ['Độc Cô Cửu Kiếm', 'Huyền Thiết Trọng Kiếm', 'Vô Kiếm Thắng Hữu Kiếm']],
+  ['Vi Tiểu Bảo', ['Thần Hành Bách Biến', 'Mỹ Nhân Tam Chiêu', 'Ba Mươi Sáu Kế']],
+  ['Hàn Lập', ['Thanh Trúc Phong Vân Kiếm', 'Đại Diễn Quyết', 'Thanh Nguyên Kiếm Quyết']],
+  ['Vương Lâm', ['Cấm Phiên', 'Nghịch Thiên Châu', 'Đoạt Mệnh Thuật']],
+  ['Mạnh Hạo', ['Phong Yêu Cửu Cấm', 'Huyết Yêu Đại Pháp', 'Đan Đạo Luyện Hoá']],
+  ['Bạch Tiểu Thuần', ['Bất Tử Trường Sinh Công', 'Luyện Linh Thuật', 'Bất Tử Cấm']],
+  ['Tiêu Viêm', ['Phật Nộ Hoả Liên', 'Diễm Phân Phệ Lãng Xích', 'Cốt Linh Lãnh Hoả']],
+  ['Lâm Động', ['Đại Hoang Tù Thiên Chỉ', 'Thôn Phệ Tổ Phù', 'Lôi Thần Chi Lực']],
+  ['Diệp Phàm', ['Hành Tự Bí', 'Đấu Tự Bí', 'Hoang Tháp Trấn Áp']],
+  ['Thạch Hạo', ['Côn Bằng Bảo Thuật', 'Lôi Đế Bảo Thuật', 'Liễu Thần Pháp']],
+]
+const heroAt = (n: number) => HEROES[Math.max(0, n - 1) % HEROES.length] ?? HEROES[0]!
+export function heroName(n: number) {
+  const round = Math.floor(Math.max(0, n - 1) / HEROES.length)
+  return `${heroAt(n)[0]}${round ? ` ${round + 1}` : ''}`
+}
+// The move follows what the agent does now, so a new step shows a new move.
+export function heroMove(n: number, doing: string) {
+  const moves = heroAt(n)[1]
+  let h = 0
+  for (const ch of doing) h = (h * 31 + (ch.codePointAt(0) ?? 0)) >>> 0
+  return moves[h % moves.length] ?? moves[0] ?? ''
+}
+// The Raster lane takes ASCII only: drop the accents, keep the name readable.
+export const ascii = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
+
+const AGENT_ICONS: [RegExp, string][] = [
+  [/explore|investigat|search|locat/i, '🔍'],
+  [/plan|architect/i, '🗺'],
+  [/review/i, '🧐'],
+  [/(?<![a-z])test/i, '🧪'],
+  [/build|edit|implement/i, '🔨'],
+  [/fetch|web/i, '🌐'],
+  [/guide|doc/i, '📜'],
+  [/design|(?<![a-z])(?:ui|ux)(?![a-z])/i, '🎨'],
+]
+export const agentIcon = (type: string) => AGENT_ICONS.find(([re]) => re.test(type))?.[1] ?? '⚔'
+
 // ---- Crew lanes: one Raster row per running agent, a comet whose speed is its token rate.
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-const CREW_TAG = 14
+const CREW_TAG = 20
 const CREW_MS = 90
 const CREW_MAX = 12
 export type CrewLane = { tag: string; color: string; rate: number }
 
 export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
   const dim = hexNum(P.muted)
-  const track = Math.max(4, width - CREW_TAG - 3)
+  // A narrow pane shrinks the tag, so a row is always exactly `width` cells.
+  const tagW = Math.min(CREW_TAG, Math.max(4, width - 10))
+  const track = Math.max(4, width - tagW - 3)
   const cells: (readonly [number, number, number])[] = []
   lanes.forEach((lane, row) => {
     const color = hexNum(lane.color)
     const tail = [0, 1, 2, 3, 4, 5].map(d => hexNum(colorAt([lane.color, P.muted], d / 6)))
     cells.push([SPIN.codePointAt((tick + row) % SPIN.length) ?? 0x20, color, DEFAULT_COLOR], [0x20, dim, DEFAULT_COLOR])
     // Model text never reaches a cell: printable ASCII only, padded to the tag width.
-    const tag = lane.tag.replace(/[^ -~]/g, '?').slice(0, CREW_TAG).padEnd(CREW_TAG + 1)
+    const tag = lane.tag.replace(/[^ -~]/g, '?').slice(0, tagW).padEnd(tagW + 1)
     for (const ch of tag) cells.push([ch.charCodeAt(0), color, DEFAULT_COLOR])
     const speed = 0.25 + Math.min(1, lane.rate / 150) * 1.25
     const span = 2 * (track - 1)
@@ -5349,7 +5401,7 @@ export const register: Register = on => {
     const hueOf = new Map(list.map((a, i) => [a.id, hues[i % hues.length] ?? P.accent]))
     const width = Math.max(20, Math.min(e.props.bodyColumns ?? 60, 72))
     const lanes = running.slice(0, CREW_MAX).map(a => ({
-      tag: `#${numOf.get(a.id)} ${a.type}`,
+      tag: `#${numOf.get(a.id)} ${ascii(heroName(numOf.get(a.id) ?? 0))}`,
       color: hueOf.get(a.id) ?? P.accent,
       rate: tokenRate(liveBy.get(a.id)?.samples ?? []),
     }))
@@ -5364,7 +5416,8 @@ export const register: Register = on => {
       const busy = id === 'main' ? mainTurn !== null : a ? isRunning(a.status) : false
       const hue = id === 'main' ? P.accent : busy ? (hueOf.get(id) ?? P.accent) : P.muted
       const n = numOf.get(id)
-      const name = id === 'main' ? 'Main' : `${n ? `#${n} ` : ''}${a ? `${a.type} · ${a.label}` : id.slice(0, 8)}`
+      const hero = id === 'main' ? '' : n ? heroName(n) : ''
+      const detail = a ? `${agentIcon(a.type)} ${a.type} · ${a.label}` : ''
       const status = id === 'main' ? '' : a ? (AGENT_STATUS[a.status] ?? a.status) : 'xong'
       const statusColor = !a ? P.muted : busy ? P.warn : a.status === 'completed' ? P.ok : a.status === 'idle' ? P.muted : P.err
       const icon = busy ? spin : a?.status === 'completed' || !a ? '✓' : a.status === 'idle' ? '○' : '✗'
@@ -5374,39 +5427,51 @@ export const register: Register = on => {
       const effort = l?.effort || r?.effort || ''
       const tokens = l?.tokens ?? 0
       // tokenCount adds every output, so the fill is the last prompt's size.
-      const ctx = l?.ctx && r?.context ? ` · ${Math.min(100, Math.round((r.context / l.ctx) * 100))}% ctx` : ''
+      const fill = l?.ctx && r?.context ? Math.min(100, Math.round((r.context / l.ctx) * 100)) : null
       const usd = l?.usd || r?.usd || 0
+      // Each figure keeps its own icon and color, dimmed once the agent is done.
+      const c = (lit: string) => (busy || id === 'main' ? lit : P.muted)
       const meta = [
-        model ? shortModel(model) : '',
-        effort,
-        start && end > start ? duration(end - start) : '',
-        tokens ? `${tok(tokens)} tok${ctx}` : '',
-        r ? `${r.steps} lần gọi` : '',
-        usd ? `≈ $${usd.toFixed(3)}` : '',
-      ].filter(Boolean)
+        model ? { t: `◆ ${shortModel(model)}`, color: c(P.violet) } : null,
+        effort ? { t: `⚡ ${effort}`, color: c(P.cyan) } : null,
+        start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c(P.info) } : null,
+        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c(P.ok) } : null,
+        fill !== null ? { t: `◔ ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c(P.ok) } : null,
+        r ? { t: `↻ ${r.steps} lần gọi`, color: P.muted } : null,
+        usd ? { t: `💰 ≈ $${usd.toFixed(3)}`, color: c(P.warn) } : null,
+      ].filter(m => m !== null)
       const spark = l && busy ? spark8(l.samples) : ''
       return (
         <Box key={`mon-${id}`} flexDirection="column" marginTop={1}>
           <Box flexDirection="row" gap={1}>
             <Text color={busy ? hue : statusColor}>{icon}</Text>
-            <Text color={busy || id === 'main' ? hue : P.muted} bold wrap="truncate-end">
-              {a?.parentId ? `↳ ${name}` : name}
+            <Text color={busy || id === 'main' ? hue : P.muted} bold>
+              {`${a?.parentId ? '↳ ' : ''}${id === 'main' ? '👑 Main' : n ? `#${n} ${hero}` : id.slice(0, 8)}`}
             </Text>
+            {detail ? <Text color={busy ? P.ink : P.muted} wrap="truncate-end">{detail}</Text> : null}
             <Text color={statusColor}>{status}</Text>
           </Box>
           {meta.length || spark ? (
-            <Box flexDirection="row" gap={1}>
-              <Text color={P.muted} wrap="wrap">{`  ${meta.join(' · ')}`}</Text>
+            <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
+              {meta.map(m => <Text key={m.t} color={m.color}>{m.t}</Text>)}
               {spark ? <Text color={hue}>{spark}</Text> : null}
             </Box>
           ) : null}
-          {busy && l?.doing && l.doing !== a?.label ? (
-            <Text color={P.info} wrap="truncate-end">{`  ⤷ ${l.doing}`}</Text>
+          {busy && n ? (
+            <Box flexDirection="row" gap={1} paddingLeft={2}>
+              <Text color={hue} bold>{`🗡 ${heroMove(n, l?.doing || a?.label || '')}`}</Text>
+              {l?.doing && l.doing !== a?.label ? (
+                <Text color={P.info} wrap="truncate-end">{`⤷ ${l.doing}`}</Text>
+              ) : null}
+            </Box>
           ) : null}
           {r ? (
-            <Text color={P.muted} wrap="truncate-end">
-              {`  ctx ${tok(r.context)} · in ${tok(r.input)} · out ${tok(r.output)} · cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}
-            </Text>
+            <Box flexDirection="row" gap={1} paddingLeft={2}>
+              <Text color={P.muted}>{`ctx ${tok(r.context)}`}</Text>
+              <Text color={c(P.cyan)}>{`↓ in ${tok(r.input)}`}</Text>
+              <Text color={c(P.pink)}>{`↑ out ${tok(r.output)}`}</Text>
+              <Text color={c(P.violet)}>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
+            </Box>
           ) : null}
         </Box>
       )
