@@ -860,6 +860,13 @@ const CREW_MS = 90
 const CREW_MAX = 12
 export type CrewLane = { tag: string; color: string; rate: number }
 
+// A 5-cell robot drawn beside a working agent's card: it holds the icon of the tool it
+// runs (💭 while it thinks), swings its arms each frame and blinks now and then.
+export function workerSprite(icon: string, tick: number): [string, string, string] {
+  const f = tick % 2 === 1
+  return [tick % 8 === 0 ? '[-_-]' : '[•_•]', f ? ` /${icon}\\` : ` \\${icon}/`, f ? ' ┘ └ ' : ' │ │ ']
+}
+
 export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
   const dim = hexNum(P.muted)
   // A narrow pane shrinks the tag, so a row is always exactly `width` cells.
@@ -5464,7 +5471,7 @@ export const register: Register = on => {
     const main = stat.get('main')
     if (!main && !mainTurn && list.length === 0 && gone.length === 0) {
       crewLanes = []
-      return <Text color={P.muted}>Chưa có agent hay phản hồi nào của model trong session này.</Text>
+      return <Text dimColor>Chưa có agent hay phản hồi nào của model trong session này.</Text>
     }
     const total = rows.reduce((acc, r) => acc + r.usd, 0)
     const sum = agentSummary(list)
@@ -5491,6 +5498,9 @@ export const register: Register = on => {
     crewLanes = animate ? lanes : []
     crewWidth = width
     crewP = { muted: P.muted }
+    // Theme muted hexes are comment grays that sink into a dark pane; text reads in the
+    // terminal's own foreground, dimmed, so it stays legible on any background.
+    const tone = (color: string) => (color === P.muted ? { dimColor: true } : { color })
     const spin = SPIN[Math.floor(now / CREW_MS) % SPIN.length] ?? '●'
 
     // Tool calls of one loop: what runs now (with its time so far), and for main the last few that ended.
@@ -5500,11 +5510,11 @@ export const register: Register = on => {
       return (
         <Box key={key} flexDirection="row" gap={1} paddingLeft={2}>
           <Text color={run ? P.warn : c.state === 'ok' ? P.ok : P.err}>{run ? `${spin} ▶` : c.state === 'ok' ? '  ✓' : '  ✗'}</Text>
-          <Text {...(run ? {} : { color: P.muted })} bold={run}>{`${toolIcon(c.tool)} ${c.tool}`}</Text>
+          <Text dimColor={!run} bold={run}>{`${toolIcon(c.tool)} ${c.tool}`}</Text>
           {c.label ? (
-            <Text {...(run ? {} : { color: P.muted })} wrap="truncate-end">{shortText(c.label)}</Text>
+            <Text dimColor={!run} wrap="truncate-end">{shortText(c.label)}</Text>
           ) : null}
-          {time ? <Text color={P.muted}>{time}</Text> : null}
+          {time ? <Text dimColor>{time}</Text> : null}
         </Box>
       )
     }
@@ -5514,14 +5524,19 @@ export const register: Register = on => {
       if (own.length === 0) return null
       const mix = toolMix(own)
       const bars = durSpark(own)
-      const fails = own.filter(c => c.state === 'fail').length
-      const ended = own.filter(c => c.state !== 'run').length
+      let fails = 0
+      let ended = 0
+      for (const c of own) {
+        if (c.state === 'run') continue
+        ended++
+        if (c.state === 'fail') fails++
+      }
       return (
         <Box key={key} flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
-          <Text color={P.muted}>📊</Text>
+          <Text dimColor>📊</Text>
           {mix.map(([tool, n]) => <Text key={`${key}-${tool}`}>{`${toolIcon(tool)}${tool}×${n}`}</Text>)}
-          {bars ? <Text color={P.muted}>⏲</Text> : null}
-          {bars ? <Text color={hue}>{bars}</Text> : null}
+          {bars ? <Text dimColor>⏲</Text> : null}
+          {bars ? <Text {...tone(hue)}>{bars}</Text> : null}
           {ended ? (
             <Text color={fails ? P.err : P.ok}>{`${meter(((ended - fails) / ended) * 100, 5)} ${ended - fails}/${ended} ok`}</Text>
           ) : null}
@@ -5550,29 +5565,33 @@ export const register: Register = on => {
                 {mainLive?.at ? <Text>{`⏳ lượt ${duration(now - mainLive.at)}`}</Text> : null}
                 <Text>{`🔧 ${mainTurn.tools} tool`}</Text>
                 <Text>{`✎ ${mainTurn.edits} sửa`}</Text>
-                <Text {...(mainTurn.failed ? { color: P.err } : { color: P.muted })}>{`✗ ${mainTurn.failed} lỗi`}</Text>
-                <Text color={act.running.length ? P.warn : P.muted}>
+                <Text {...tone(mainTurn.failed ? P.err : P.muted)}>{`✗ ${mainTurn.failed} lỗi`}</Text>
+                <Text {...tone(act.running.length ? P.warn : P.muted)}>
                   {act.running.length ? `▶ ${act.running.length} đang chạy` : '✍ đang suy nghĩ / viết trả lời'}
                 </Text>
               </Box>
             </Box>
           ) : (
             <Box flexDirection="row" gap={1} paddingLeft={2}>
-              <Text color={P.muted}>○ Nghỉ, chờ prompt</Text>
+              <Text dimColor>○ Nghỉ, chờ prompt</Text>
               {lastTurn ? (
-                <Text color={P.muted}>
+                <Text dimColor>
                   {`· lượt trước ${duration(lastTurn.seconds * 1000)} · ${lastTurn.tools} tool${lastTurn.failed ? ` · ${lastTurn.failed} lỗi` : ''}`}
                 </Text>
               ) : null}
             </Box>
           )}
           {mainTurn ? act.running.map(c => callRow(c, `mon-main-run-${c.id}`)) : null}
-          {act.recent.length ? <Text color={P.muted}>{'  Vừa xong:'}</Text> : null}
+          {act.recent.length ? <Text dimColor>{'  Vừa xong:'}</Text> : null}
           {act.recent.map(c => callRow(c, `mon-main-done-${c.id}`))}
         </Box>
       )
     }
 
+    const botIcon = (id: string) => {
+      const run = ownOf(id === 'main' ? undefined : id).find(c => c.state === 'run')
+      return run ? toolIcon(run.tool) : '💭'
+    }
     const card = (id: string, a: Agent | undefined, r: AgentStat | undefined) => {
       const l = liveBy.get(id)
       const busy = id === 'main' ? mainTurn !== null : a ? isRunning(a.status) : false
@@ -5606,27 +5625,35 @@ export const register: Register = on => {
       ].filter(m => m !== null)
       const spark = l && busy ? spark8(l.samples) : ''
       return (
-        <Box key={`mon-${id}`} flexDirection="column" marginTop={1}>
+        <Box key={`mon-${id}`} flexDirection="row" gap={1} marginTop={1}>
+          {busy && width >= 40 ? (
+            <Box flexDirection="column" flexShrink={0}>
+              {workerSprite(botIcon(id), Math.floor(now / CREW_MS)).map((line, i) => (
+                <Text key={`mon-${id}-bot-${i}`} {...tone(hue)}>{line}</Text>
+              ))}
+            </Box>
+          ) : null}
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
           <Box flexDirection="row" gap={1}>
-            <Text color={busy ? hue : statusColor}>{icon}</Text>
-            <Text color={busy || id === 'main' ? hue : P.muted} bold>
+            <Text {...tone(busy ? hue : statusColor)}>{icon}</Text>
+            <Text {...tone(busy || id === 'main' ? hue : P.muted)} bold>
               {`${a?.parentId ? '↳ ' : ''}${id === 'main' ? '👑 Main' : n ? `#${n} ${hero}` : id.slice(0, 8)}`}
             </Text>
-            {/* ink is the on-background color (near black); plain text keeps the terminal's foreground. */}
-            {detail ? <Text {...(busy ? {} : { color: P.muted })} wrap="truncate-end">{detail}</Text> : null}
-            <Text color={statusColor}>{status}</Text>
+            {/* Never P.ink (near black) or P.muted (comment gray): both sink into a dark pane. */}
+            {detail ? <Text dimColor={!busy} wrap="truncate-end">{detail}</Text> : null}
+            <Text {...tone(statusColor)}>{status}</Text>
           </Box>
           {meta.length || spark ? (
             <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
-              {meta.map(m => <Text key={m.t} {...(m.color ? { color: m.color } : {})}>{m.t}</Text>)}
-              {spark ? <Text color={hue}>{spark}</Text> : null}
+              {meta.map(m => <Text key={m.t} {...(m.color ? tone(m.color) : {})}>{m.t}</Text>)}
+              {spark ? <Text {...tone(hue)}>{spark}</Text> : null}
             </Box>
           ) : null}
           {busy && n ? (
             <Box flexDirection="row" gap={1} paddingLeft={2}>
-              <Text color={hue} bold>{`🗡 ${heroMove(n, l?.doing || a?.label || '')}`}</Text>
+              <Text {...tone(hue)} bold>{`🗡 ${heroMove(n, l?.doing || a?.label || '')}`}</Text>
               {l?.doing && l.doing !== a?.label ? (
-                <Text color={P.muted} wrap="truncate-end">{`⤷ ${l.doing}`}</Text>
+                <Text dimColor wrap="truncate-end">{`⤷ ${l.doing}`}</Text>
               ) : null}
             </Box>
           ) : null}
@@ -5635,13 +5662,14 @@ export const register: Register = on => {
           {callCharts(id === 'main' ? undefined : id, hue, `mon-${id}-chart`)}
           {r ? (
             <Box flexDirection="row" gap={1} paddingLeft={2}>
-              <Text color={P.muted}>{`ctx ${tok(r.context)}`}</Text>
+              <Text dimColor>{`ctx ${tok(r.context)}`}</Text>
               {/* Token breakdown is secondary detail: one quiet tone. */}
-              <Text color={P.muted}>{`↓ in ${tok(r.input)}`}</Text>
-              <Text color={P.muted}>{`↑ out ${tok(r.output)}`}</Text>
-              <Text color={P.muted}>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
+              <Text dimColor>{`↓ in ${tok(r.input)}`}</Text>
+              <Text dimColor>{`↑ out ${tok(r.output)}`}</Text>
+              <Text dimColor>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
             </Box>
           ) : null}
+          </Box>
         </Box>
       )
     }
@@ -5650,7 +5678,7 @@ export const register: Register = on => {
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row" gap={2} flexWrap="wrap">
           <Text color={P.accent} bold>{`🤖 ${running.length} agent đang chạy`}</Text>
-          <Text color={P.muted}>{`${list.length + gone.length} agent trong session`}</Text>
+          <Text dimColor>{`${list.length + gone.length} agent trong session`}</Text>
           {sum.total ? (
             <Text>{`${meter((sum.done / sum.total) * 100, 8)} ▶${sum.running} ✓${sum.done}${sum.failed ? ` ✗${sum.failed}` : ''}`}</Text>
           ) : null}
@@ -5663,7 +5691,7 @@ export const register: Register = on => {
           </Box>
         ) : null}
         {running.length > CREW_MAX && animate ? (
-          <Text color={P.muted}>{`  … và ${running.length - CREW_MAX} agent nữa đang chạy`}</Text>
+          <Text dimColor>{`  … và ${running.length - CREW_MAX} agent nữa đang chạy`}</Text>
         ) : null}
         {main || mainTurn ? card('main', undefined, main) : null}
         {subs.map(a => card(a.id, a, stat.get(a.id)))}

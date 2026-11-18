@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent } from '../hooks/register'
+import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent, workerSprite } from '../hooks/register'
 
 test('agent counts group the statuses the pane and band show', () => {
   const list = ['running', 'pending', 'waiting', 'idle', 'completed', 'completed', 'failed', 'killed'].map(status => ({
@@ -181,4 +181,16 @@ test('a main call left running when the turn ends settles as failed; subagent ca
   const by = callsByAgent(out)
   expect(by.get('')?.map(x => x.id)).toEqual(['m1', 'm2'])
   expect(by.get('a1')?.map(x => x.id)).toEqual(['s1'])
+})
+
+test('workerSprite: 3 rows of 5 cells, arms swing each frame, blinks every 8th', () => {
+  const a = workerSprite('🔍', 1)
+  const b = workerSprite('🔍', 2)
+  expect(a).toHaveLength(3)
+  expect(a[1]).toContain('🔍')
+  expect(a[1]).not.toBe(b[1])
+  expect(a[2]).not.toBe(b[2])
+  expect(workerSprite('💭', 8)[0]).toBe('[-_-]')
+  expect(a[0]).toBe('[•_•]')
+  for (const row of a) expect(row.replace('🔍', '##').length).toBe(5)
 })
