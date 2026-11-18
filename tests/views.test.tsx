@@ -507,9 +507,43 @@ test('the AI monitor shows each agent loop with model, effort, tokens and cost',
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
   expect(texts).toContain('Main')
   expect(texts).toContain('◆ sonnet-5-5')
-  expect(texts).toContain('2 lần gọi')
+  // a1 is in no agent list (finished): its card is gone, Main stays.
+  expect(texts).not.toContain('2 lần gọi')
   expect(texts).toContain('ctx 3.0k')
   await ui.unmount()
+})
+
+test('the AI monitor shows what the main loop does: prompt, running tool, last calls', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  let release: () => void = () => undefined
+  const held = new Promise<void>(r => (release = r))
+  on('tool.call', async (_$, e) => {
+    if ((e as { tool: string }).tool === 'Grep') await held
+    return { result: { ok: true } } as never
+  })
+  await $.turn.start({ turnId: 't1', text: 'sửa pane monitor\nchi tiết' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/repo/hooks/register.tsx', tool_use_id: 'u1' } as never)
+  const grep = $.tool.call({ tool: 'Grep', pattern: 'heroName', tool_use_id: 'u2' } as never)
+  await new Promise(r => setTimeout(r, 0))
+  const ui = await $.ui.mount({
+    plugin: 'terminal-polish',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'terminal-polish-monitor',
+    props: { title: 'AI monitor', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  expect(texts).toContain('Main')
+  expect(texts).toContain('sửa pane monitor')
+  expect(texts).toContain('🔧 2 tool')
+  expect(texts).toContain('heroName')
+  expect(texts).toContain('Vừa xong:')
+  expect(texts).toContain('register.tsx')
+  await ui.unmount()
+  release()
+  await grep
 })
 
 test('a turn that edits a file publishes a replay with its diff', async ($, on) => {

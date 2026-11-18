@@ -88,7 +88,8 @@ export type AgentLive = {
   endTime?: number
 }
 export type Diff = { path: string; text: string; note: string }
-export type Call = { id: string; tool: string; label: string; state: 'run' | 'ok' | 'fail'; ms?: number }
+// agent: the subagent that made the call (none for the main loop); at: when it began.
+export type Call = { id: string; tool: string; label: string; state: 'run' | 'ok' | 'fail'; ms?: number; agent?: string; at?: number }
 export type Checkpoint = { id: number; path: string; copy: string | null; at: number }
 export type Todo = { text: string; done: boolean; file?: string }
 export type CommitDraft = { message: string; files: number; note: string }
@@ -128,7 +129,7 @@ declare module 'claude-code' {
       git: Git | null
       turn: Turn | null
       // The main loop's running turn, for the cancel button under its prompt.
-      liveTurn: { id: string; text: string } | null
+      liveTurn: { id: string; text: string; at?: number } | null
       failed: { text: string } | null
       last: LastTurn | null
       history: LastTurn[]

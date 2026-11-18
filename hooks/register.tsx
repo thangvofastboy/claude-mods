@@ -447,6 +447,71 @@ function shortLabel(label: string) {
     marker: `…${more ? ` (+${more} dòng)` : ''}`,
   }
 }
+export const shortText = (label: string) => {
+  const s = shortLabel(label)
+  return s.head + s.marker
+}
+
+// What a tool call is about, in one line: the command, file, pattern, URL or task.
+const LABEL_KEYS = ['description', 'pattern', 'query', 'url', 'skill', 'notebook_path', 'path', 'prompt'] as const
+export function toolLabel(e: { tool: string } & Record<string, unknown>) {
+  if (e.tool === 'Bash' && typeof e.command === 'string') return commandLabel(e.command)
+  if ((e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'Read') && typeof e.file_path === 'string')
+    return baseName(e.file_path)
+  const key = LABEL_KEYS.find(k => typeof e[k] === 'string' && (e[k] as string).trim())
+  return key ? commandLabel((e[key] as string).slice(0, 400)) : ''
+}
+
+const TOOL_ICONS: Record<string, string> = {
+  Bash: '💻', Monitor: '📡', Read: '📖', Edit: '✏️', Write: '📝', NotebookEdit: '📓', Grep: '🔎', Glob: '🗂',
+  Agent: '🤖', Task: '🤖', WebFetch: '🌐', WebSearch: '🌍', Skill: '🎯', TodoWrite: '☑', AskUserQuestion: '❓',
+}
+export const toolIcon = (tool: string) => TOOL_ICONS[tool] ?? (tool.startsWith('mcp__') ? '🔌' : '🛠')
+
+// A filled meter, e.g. ▰▰▰▱▱ for 60% at width 5.
+export function meter(pct: number, width = 10) {
+  const on = Math.max(0, Math.min(width, Math.round((pct / 100) * width)))
+  return '▰'.repeat(on) + '▱'.repeat(width - on)
+}
+
+// Which tools a loop leaned on, most used first: [tool, count].
+export function toolMix(list: readonly Call[], top = 4) {
+  const n = new Map<string, number>()
+  for (const c of list) n.set(c.tool, (n.get(c.tool) ?? 0) + 1)
+  return [...n].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, top)
+}
+
+// How long the last ended calls took, oldest to newest, as bars (taller is slower).
+export function durSpark(list: readonly Call[], max = 16) {
+  const ms = list.filter(c => c.state !== 'run' && c.ms !== undefined).slice(-max).map(c => c.ms ?? 0)
+  const top = Math.max(1, ...ms)
+  return ms.map(v => BARS[Math.min(7, Math.round((v / top) * 7))] ?? '').join('')
+}
+
+// Main calls still marked running once the turn is over ended without a result: mark them failed.
+export const settleCalls = (list: readonly Call[]) =>
+  list.map(c => (!c.agent && c.state === 'run' ? { ...c, state: 'fail' as const } : c))
+
+// Calls grouped by loop ('' is main), so a render filters the list once, not per card.
+export function callsByAgent(list: readonly Call[]) {
+  const by = new Map<string, Call[]>()
+  for (const c of list) {
+    const k = c.agent ?? ''
+    const own = by.get(k)
+    if (own) own.push(c)
+    else by.set(k, [c])
+  }
+  return by
+}
+
+// One agent loop's calls (main: no agent id): what runs now, and the last few that ended, newest first.
+export function activityOf(list: readonly Call[], agent: string | undefined, recent = 5) {
+  const own = list.filter(c => c.agent === agent)
+  return {
+    running: own.filter(c => c.state === 'run'),
+    recent: own.filter(c => c.state !== 'run').slice(-recent).reverse(),
+  }
+}
 
 // Split, not one regex with \s* on both sides of the newline: linear on any input.
 const commandLabel = (command: string) =>
@@ -4008,10 +4073,11 @@ export const register: Register = on => {
     failCounts.clear()
     jokeAt = Math.floor(Math.random() * JOKES.length)
     const value: Turn = { tools: 0, failed: 0, edits: 0 }
+    const at = await $.clock.now().catch(() => 0)
     const [, , effect, s] = await Promise.all([
       Promise.all([
         update($, turn, () => value),
-        update($, liveTurn, () => ({ id: e.turnId, text: e.text })),
+        update($, liveTurn, () => ({ id: e.turnId, text: e.text, ...(at ? { at } : {}) })),
         update($, failed, () => null),
         update($, looping, () => null),
       ]),
@@ -4262,15 +4328,15 @@ export const register: Register = on => {
   // here can neither block a tool nor knock the guard out of the chain.
   on('tool.call', async ($, e, next) => {
     const path = e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'Read' ? e.file_path : undefined
-    const label = e.tool === 'Bash' ? commandLabel(e.command) : path ? baseName(path) : ''
-    const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run' }
+    const label = toolLabel(e as unknown as { tool: string } & Record<string, unknown>)
+    const call: Call = { id: e.tool_use_id, tool: e.tool, label, state: 'run', ...(e.agentId ? { agent: e.agentId } : {}) }
     let began = 0
     let pointId: number | undefined
     let writeBefore = ''
     try {
-      const [now, , , s] = await Promise.all([
-        $.clock.now(),
-        update($, calls, list => [...list, call].slice(-100)),
+      const now = await $.clock.now()
+      const [, , s] = await Promise.all([
+        update($, calls, list => [...list, { ...call, at: now }].slice(-100)),
         update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t)),
         read($, settings),
       ])
@@ -4383,6 +4449,8 @@ export const register: Register = on => {
         update($, last, () => done),
         update($, history, list => [...list, done].slice(-20)),
         Promise.all([update($, turn, () => null), update($, liveTurn, () => null), update($, looping, () => null)]),
+        // A main call that never reported back (aborted, thrown) must not read as running forever.
+        update($, calls, list => (list.some(c => !c.agent && c.state === 'run') ? settleCalls(list) : list)),
         Promise.all([update($, autoModel, () => null), update($, autoEffort, () => null)]),
       ])
       if (e.reason === 'answer' && !e.isAborted) await update($, lastAnswer, () => e.answer)
@@ -4876,7 +4944,7 @@ export const register: Register = on => {
           <Box flexDirection="column">
             {heading(`Tiến trình đang chạy (${busy.length})`)}
             {busy.slice(-6).map(c => (
-              <Text color={P.warn} wrap="truncate-end">{`◌ ${c.tool}${c.label ? ` · ${shortLabel(c.label)}` : ''}`}</Text>
+              <Text color={P.warn} wrap="truncate-end">{`◌ ${c.tool}${c.label ? ` · ${shortText(c.label)}` : ''}`}</Text>
             ))}
           </Box>
         )}
@@ -5375,41 +5443,135 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const { Box, Text } = t
     const Raster = 'Raster' in t ? t.Raster : undefined
-    const [rows, list, live, use, now, mainTurn] = await Promise.all([
+    const [rows, list, live, use, now, mainTurn, callList, mainLive, lastTurn] = await Promise.all([
       read($, agentStats),
       read($, agents),
       read($, agentLive),
       read($, usage),
       $.clock.now(),
       read($, turn),
+      read($, calls),
+      read($, liveTurn),
+      read($, last),
     ])
     const stat = new Map(rows.map(r => [r.id, r]))
     const liveBy = new Map(live.map(l => [l.id, l]))
     const known = new Set(list.map(a => a.id))
     const running = list.filter(a => isRunning(a.status))
-    const subs = [...running, ...list.filter(a => !isRunning(a.status)).reverse()]
+    // A finished subagent leaves the pane; the header still counts it and the cost total keeps it.
+    const subs = running
     const gone = rows.filter(r => r.id !== 'main' && !known.has(r.id))
     const main = stat.get('main')
-    if (!main && subs.length === 0 && gone.length === 0) {
+    if (!main && !mainTurn && list.length === 0 && gone.length === 0) {
       crewLanes = []
       return <Text color={P.muted}>Chưa có agent hay phản hồi nào của model trong session này.</Text>
     }
-    const total = rows.reduce((sum, r) => sum + r.usd, 0)
-    const hues = [P.accent, P.violet, P.cyan, P.ok, P.pink, P.info, P.warn]
+    const total = rows.reduce((acc, r) => acc + r.usd, 0)
+    const sum = agentSummary(list)
+    // Identity hues only; ok/warn/err stay reserved for status so a green name never reads as "done".
+    const hues = [P.accent, P.violet, P.cyan, P.pink, P.info]
     // Spawn order, so an agent keeps its number and color when others finish.
     const numOf = new Map(list.map((a, i) => [a.id, i + 1]))
     const hueOf = new Map(list.map((a, i) => [a.id, hues[i % hues.length] ?? P.accent]))
     const width = Math.max(20, Math.min(e.props.bodyColumns ?? 60, 72))
-    const lanes = running.slice(0, CREW_MAX).map(a => ({
-      tag: `#${numOf.get(a.id)} ${ascii(heroName(numOf.get(a.id) ?? 0))}`,
-      color: hueOf.get(a.id) ?? P.accent,
-      rate: tokenRate(liveBy.get(a.id)?.samples ?? []),
-    }))
+    const byAgent = callsByAgent(callList)
+    const ownOf = (agent: string | undefined) => byAgent.get(agent ?? '') ?? []
+    const mainRunning = mainTurn ? activityOf(ownOf(undefined), undefined, 0).running.length : 0
+    // Main has no token samples: its comet speeds up with the tools it runs at once.
+    const mainLane = mainTurn ? [{ tag: 'MAIN', color: P.accent, rate: 40 + mainRunning * 50 }] : []
+    const lanes = [
+      ...mainLane,
+      ...running.slice(0, CREW_MAX).map(a => ({
+        tag: `#${numOf.get(a.id)} ${ascii(heroName(numOf.get(a.id) ?? 0))}`,
+        color: hueOf.get(a.id) ?? P.accent,
+        rate: tokenRate(liveBy.get(a.id)?.samples ?? []),
+      })),
+    ]
     const animate = s.anim && Raster !== undefined && lanes.length > 0
     crewLanes = animate ? lanes : []
     crewWidth = width
     crewP = { muted: P.muted }
     const spin = SPIN[Math.floor(now / CREW_MS) % SPIN.length] ?? '●'
+
+    // Tool calls of one loop: what runs now (with its time so far), and for main the last few that ended.
+    const callRow = (c: Call, key: string) => {
+      const run = c.state === 'run'
+      const time = run ? (c.at ? duration(now - c.at) : '') : c.ms !== undefined ? duration(c.ms) : ''
+      return (
+        <Box key={key} flexDirection="row" gap={1} paddingLeft={2}>
+          <Text color={run ? P.warn : c.state === 'ok' ? P.ok : P.err}>{run ? `${spin} ▶` : c.state === 'ok' ? '  ✓' : '  ✗'}</Text>
+          <Text {...(run ? {} : { color: P.muted })} bold={run}>{`${toolIcon(c.tool)} ${c.tool}`}</Text>
+          {c.label ? (
+            <Text {...(run ? {} : { color: P.muted })} wrap="truncate-end">{shortText(c.label)}</Text>
+          ) : null}
+          {time ? <Text color={P.muted}>{time}</Text> : null}
+        </Box>
+      )
+    }
+    // Charts of one loop's calls: its tool mix and how long each recent call took.
+    const callCharts = (agent: string | undefined, hue: string, key: string) => {
+      const own = ownOf(agent)
+      if (own.length === 0) return null
+      const mix = toolMix(own)
+      const bars = durSpark(own)
+      const fails = own.filter(c => c.state === 'fail').length
+      const ended = own.filter(c => c.state !== 'run').length
+      return (
+        <Box key={key} flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
+          <Text color={P.muted}>📊</Text>
+          {mix.map(([tool, n]) => <Text key={`${key}-${tool}`}>{`${toolIcon(tool)}${tool}×${n}`}</Text>)}
+          {bars ? <Text color={P.muted}>⏲</Text> : null}
+          {bars ? <Text color={hue}>{bars}</Text> : null}
+          {ended ? (
+            <Text color={fails ? P.err : P.ok}>{`${meter(((ended - fails) / ended) * 100, 5)} ${ended - fails}/${ended} ok`}</Text>
+          ) : null}
+        </Box>
+      )
+    }
+    // A busy subagent: its running calls, then its last three ended.
+    const subCalls = (id: string) => {
+      const act = activityOf(ownOf(id), id, 3)
+      return [...act.running, ...act.recent].map(c => callRow(c, `mon-${id}-${c.state}-${c.id}`))
+    }
+    const mainBlock = () => {
+      const act = activityOf(ownOf(undefined), undefined)
+      const prompt = (mainLive?.text ?? '').split('\n').find(l => l.trim())?.trim() ?? ''
+      return (
+        <Box key="mon-main-act" flexDirection="column">
+          {mainTurn ? (
+            <Box flexDirection="column">
+              {prompt ? (
+                <Box flexDirection="row" gap={1} paddingLeft={2}>
+                  <Text color={P.accent}>💬</Text>
+                  <Text wrap="truncate-end">{prompt}</Text>
+                </Box>
+              ) : null}
+              <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
+                {mainLive?.at ? <Text>{`⏳ lượt ${duration(now - mainLive.at)}`}</Text> : null}
+                <Text>{`🔧 ${mainTurn.tools} tool`}</Text>
+                <Text>{`✎ ${mainTurn.edits} sửa`}</Text>
+                <Text {...(mainTurn.failed ? { color: P.err } : { color: P.muted })}>{`✗ ${mainTurn.failed} lỗi`}</Text>
+                <Text color={act.running.length ? P.warn : P.muted}>
+                  {act.running.length ? `▶ ${act.running.length} đang chạy` : '✍ đang suy nghĩ / viết trả lời'}
+                </Text>
+              </Box>
+            </Box>
+          ) : (
+            <Box flexDirection="row" gap={1} paddingLeft={2}>
+              <Text color={P.muted}>○ Nghỉ, chờ prompt</Text>
+              {lastTurn ? (
+                <Text color={P.muted}>
+                  {`· lượt trước ${duration(lastTurn.seconds * 1000)} · ${lastTurn.tools} tool${lastTurn.failed ? ` · ${lastTurn.failed} lỗi` : ''}`}
+                </Text>
+              ) : null}
+            </Box>
+          )}
+          {mainTurn ? act.running.map(c => callRow(c, `mon-main-run-${c.id}`)) : null}
+          {act.recent.length ? <Text color={P.muted}>{'  Vừa xong:'}</Text> : null}
+          {act.recent.map(c => callRow(c, `mon-main-done-${c.id}`))}
+        </Box>
+      )
+    }
 
     const card = (id: string, a: Agent | undefined, r: AgentStat | undefined) => {
       const l = liveBy.get(id)
@@ -5429,14 +5591,16 @@ export const register: Register = on => {
       // tokenCount adds every output, so the fill is the last prompt's size.
       const fill = l?.ctx && r?.context ? Math.min(100, Math.round((r.context / l.ctx) * 100)) : null
       const usd = l?.usd || r?.usd || 0
-      // Each figure keeps its own icon and color, dimmed once the agent is done.
-      const c = (lit: string) => (busy || id === 'main' ? lit : P.muted)
+      // Figures read in the terminal's own text color; color is kept for meaning
+      // (a filling context, the cost), and a finished agent dims as a whole.
+      const live = busy || id === 'main'
+      const c = (lit?: string) => (live ? lit : P.muted)
       const meta = [
-        model ? { t: `◆ ${shortModel(model)}`, color: c(P.violet) } : null,
-        effort ? { t: `⚡ ${effort}`, color: c(P.cyan) } : null,
-        start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c(P.info) } : null,
-        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c(P.ok) } : null,
-        fill !== null ? { t: `◔ ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c(P.ok) } : null,
+        model ? { t: `◆ ${shortModel(model)}`, color: c() } : null,
+        effort ? { t: `⚡ ${effort}`, color: c() } : null,
+        start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c() } : null,
+        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c() } : null,
+        fill !== null ? { t: `◔ ${meter(fill, 8)} ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c() } : null,
         r ? { t: `↻ ${r.steps} lần gọi`, color: P.muted } : null,
         usd ? { t: `💰 ≈ $${usd.toFixed(3)}`, color: c(P.warn) } : null,
       ].filter(m => m !== null)
@@ -5448,12 +5612,13 @@ export const register: Register = on => {
             <Text color={busy || id === 'main' ? hue : P.muted} bold>
               {`${a?.parentId ? '↳ ' : ''}${id === 'main' ? '👑 Main' : n ? `#${n} ${hero}` : id.slice(0, 8)}`}
             </Text>
-            {detail ? <Text color={busy ? P.ink : P.muted} wrap="truncate-end">{detail}</Text> : null}
+            {/* ink is the on-background color (near black); plain text keeps the terminal's foreground. */}
+            {detail ? <Text {...(busy ? {} : { color: P.muted })} wrap="truncate-end">{detail}</Text> : null}
             <Text color={statusColor}>{status}</Text>
           </Box>
           {meta.length || spark ? (
             <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
-              {meta.map(m => <Text key={m.t} color={m.color}>{m.t}</Text>)}
+              {meta.map(m => <Text key={m.t} {...(m.color ? { color: m.color } : {})}>{m.t}</Text>)}
               {spark ? <Text color={hue}>{spark}</Text> : null}
             </Box>
           ) : null}
@@ -5461,16 +5626,20 @@ export const register: Register = on => {
             <Box flexDirection="row" gap={1} paddingLeft={2}>
               <Text color={hue} bold>{`🗡 ${heroMove(n, l?.doing || a?.label || '')}`}</Text>
               {l?.doing && l.doing !== a?.label ? (
-                <Text color={P.info} wrap="truncate-end">{`⤷ ${l.doing}`}</Text>
+                <Text color={P.muted} wrap="truncate-end">{`⤷ ${l.doing}`}</Text>
               ) : null}
             </Box>
           ) : null}
+          {id === 'main' ? mainBlock() : null}
+          {busy && a ? subCalls(id) : null}
+          {callCharts(id === 'main' ? undefined : id, hue, `mon-${id}-chart`)}
           {r ? (
             <Box flexDirection="row" gap={1} paddingLeft={2}>
               <Text color={P.muted}>{`ctx ${tok(r.context)}`}</Text>
-              <Text color={c(P.cyan)}>{`↓ in ${tok(r.input)}`}</Text>
-              <Text color={c(P.pink)}>{`↑ out ${tok(r.output)}`}</Text>
-              <Text color={c(P.violet)}>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
+              {/* Token breakdown is secondary detail: one quiet tone. */}
+              <Text color={P.muted}>{`↓ in ${tok(r.input)}`}</Text>
+              <Text color={P.muted}>{`↑ out ${tok(r.output)}`}</Text>
+              <Text color={P.muted}>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
             </Box>
           ) : null}
         </Box>
@@ -5481,7 +5650,10 @@ export const register: Register = on => {
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row" gap={2} flexWrap="wrap">
           <Text color={P.accent} bold>{`🤖 ${running.length} agent đang chạy`}</Text>
-          <Text color={P.muted}>{`${subs.length + gone.length} agent trong session`}</Text>
+          <Text color={P.muted}>{`${list.length + gone.length} agent trong session`}</Text>
+          {sum.total ? (
+            <Text>{`${meter((sum.done / sum.total) * 100, 8)} ▶${sum.running} ✓${sum.done}${sum.failed ? ` ✗${sum.failed}` : ''}`}</Text>
+          ) : null}
           <Text color={P.warn}>{`≈ $${total.toFixed(2)} ước tính`}</Text>
           {use?.usd != null ? <Text color={P.ok}>{`session thật: $${use.usd.toFixed(2)}`}</Text> : null}
         </Box>
@@ -5493,9 +5665,8 @@ export const register: Register = on => {
         {running.length > CREW_MAX && animate ? (
           <Text color={P.muted}>{`  … và ${running.length - CREW_MAX} agent nữa đang chạy`}</Text>
         ) : null}
-        {main ? card('main', undefined, main) : null}
+        {main || mainTurn ? card('main', undefined, main) : null}
         {subs.map(a => card(a.id, a, stat.get(a.id)))}
-        {gone.map(r => card(r.id, undefined, r))}
       </Box>
     )
   })

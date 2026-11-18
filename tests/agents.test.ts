@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate } from '../hooks/register'
+import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent } from '../hooks/register'
 
 test('agent counts group the statuses the pane and band show', () => {
   const list = ['running', 'pending', 'waiting', 'idle', 'completed', 'completed', 'failed', 'killed'].map(status => ({
@@ -104,7 +104,7 @@ test('two agents at once open the monitor, once per burst', async ($, on) => {
   expect(await ui.findAll({ type: 'Raster' })).toHaveLength(1)
   await ui.unmount()
 
-  // a1 finishes: the others keep their numbers, and a1's time stops counting.
+  // a1 finishes: it leaves the pane, the others keep their numbers.
   listed = [agent('a1', { status: 'completed' }), agent('a2'), agent('a3')]
   const shot = async () => {
     await spawn()
@@ -125,14 +125,9 @@ test('two agents at once open the monitor, once per burst', async ($, on) => {
   expect(later.join('\n')).toContain('2 agent đang chạy')
   expect(later.join('\n')).toContain('#2 Dương Quá')
   expect(later.join('\n')).toContain('#3 Tiểu Long Nữ')
-  // The figures of a1, from its icon line to the next card: a done agent's time stops.
-  const a1Meta = (lines: string[]) => {
-    const from = lines.findIndex(l => l.includes('task a1'))
-    const rest = lines.slice(from + 1)
-    return rest.slice(0, rest.findIndex(l => l.startsWith('#'))).filter(l => /^[◆⚡⏱]/.test(l)).join(' ')
-  }
-  expect(a1Meta(first)).toContain('◆ haiku-5-5 ⚡ low')
-  expect(a1Meta(later)).toBe(a1Meta(first))
+  // A finished subagent leaves the pane; the header still counts it.
+  expect(first.join('\n')).not.toContain('task a1')
+  expect(later.join('\n')).toContain('3 agent trong session')
 })
 
 test('subagents take hero names by spawn order, with moves and type icons', () => {
@@ -146,4 +141,44 @@ test('subagents take hero names by spawn order, with moves and type icons', () =
   expect(agentIcon('general-purpose')).toBe('⚔')
   expect(agentIcon('quick-suite')).toBe('⚔')
   expect(agentIcon('ui-ux-pro')).toBe('🎨')
+})
+
+test('a tool call reads as one line: command, file, pattern or task', () => {
+  expect(toolLabel({ tool: 'Bash', command: 'npm test\n  --watch' })).toBe('npm test ⏎ --watch')
+  expect(toolLabel({ tool: 'Edit', file_path: '/repo/hooks/register.tsx' })).toBe('register.tsx')
+  expect(toolLabel({ tool: 'Grep', pattern: 'heroName' })).toBe('heroName')
+  expect(toolLabel({ tool: 'Agent', description: 'Tìm chỗ vẽ pane', prompt: 'dài' })).toBe('Tìm chỗ vẽ pane')
+  expect(toolLabel({ tool: 'TodoWrite', todos: [] })).toBe('')
+})
+
+test('each loop sees only its own calls: running now, then the last ended, newest first', () => {
+  const c = (id: string, state: 'run' | 'ok' | 'fail', agent?: string) => ({ id, tool: 'Bash', label: id, state, ...(agent ? { agent } : {}) })
+  const list = [c('m1', 'ok'), c('s1', 'run', 'a1'), c('m2', 'fail'), c('m3', 'run'), c('m4', 'ok')]
+  const main = activityOf(list, undefined)
+  expect(main.running.map(x => x.id)).toEqual(['m3'])
+  expect(main.recent.map(x => x.id)).toEqual(['m4', 'm2', 'm1'])
+  expect(activityOf(list, 'a1').running.map(x => x.id)).toEqual(['s1'])
+  expect(activityOf(list, undefined, 1).recent.map(x => x.id)).toEqual(['m4'])
+})
+
+test('monitor charts: tool icon, meter, tool mix and call-time bars', () => {
+  expect(toolIcon('Bash')).toBe('💻')
+  expect(toolIcon('mcp__x__y')).toBe('🔌')
+  expect(toolIcon('Unknown')).toBe('🛠')
+  expect(meter(60, 5)).toBe('▰▰▰▱▱')
+  expect(meter(150, 4)).toBe('▰▰▰▰')
+  expect(meter(-5, 3)).toBe('▱▱▱')
+  const c = (tool: string, state: 'run' | 'ok' | 'fail', ms?: number) => ({ id: tool + ms, tool, label: '', state, ...(ms !== undefined ? { ms } : {}) })
+  const list = [c('Read', 'ok', 100), c('Bash', 'ok', 800), c('Read', 'fail', 400), c('Grep', 'run')]
+  expect(toolMix(list)).toEqual([['Read', 2], ['Bash', 1], ['Grep', 1]])
+  expect(durSpark(list)).toBe('▂█▅')
+})
+
+test('a main call left running when the turn ends settles as failed; subagent calls stay', () => {
+  const c = (id: string, state: 'run' | 'ok', agent?: string) => ({ id, tool: 'Bash', label: '', state, ...(agent ? { agent } : {}) })
+  const out = settleCalls([c('m1', 'run'), c('m2', 'ok'), c('s1', 'run', 'a1')])
+  expect(out.map(x => x.state)).toEqual(['fail', 'ok', 'run'])
+  const by = callsByAgent(out)
+  expect(by.get('')?.map(x => x.id)).toEqual(['m1', 'm2'])
+  expect(by.get('a1')?.map(x => x.id)).toEqual(['s1'])
 })
