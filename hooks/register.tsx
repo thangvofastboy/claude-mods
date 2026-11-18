@@ -115,7 +115,7 @@ const DEFAULTS: Settings = {
   promptlint: true,
   shadow: false,
   prci: true,
-  crew: true,
+  crew: false,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -168,7 +168,7 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
-  crew: 'tự mở AI monitor (danh sách agent chạy hoạt hình) khi có từ 2 subagent chạy cùng lúc',
+  crew: 'tự mở pane AI monitor (danh sách agent chạy hoạt hình) khi có từ 2 subagent chạy cùng lúc',
   prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong, phím 🔧 Sửa CI khi CI lỗi; cần gh',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
   promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
@@ -549,6 +549,7 @@ const look = ($: EngineInterface) => Promise.all([palette($), read($, settings)]
 async function setSettings($: EngineInterface, patch: Partial<Settings>) {
   const next = await update($, settings, s => ({ ...s, ...patch }))
   await $.store.set('settings', next)
+  void syncWeb($).catch(() => undefined)
   return next
 }
 
@@ -559,6 +560,11 @@ async function loadSettings($: EngineInterface) {
   const loaded = { ...DEFAULTS }
   for (const key of Object.keys(DEFAULTS) as (keyof Settings)[]) {
     if (typeof stored?.[key] === 'boolean') loaded[key] = stored[key] === true
+  }
+  // v0.24 turned crew off by default; a stored `true` was the old default, not a choice.
+  if (stored && !(await $.store.get('crewDefaultOff'))) {
+    loaded.crew = false
+    await Promise.all([$.store.set('settings', loaded), $.store.set('crewDefaultOff', true)])
   }
   await update($, settings, () => loaded)
   const saved = await $.store.get('prompts')
@@ -2268,6 +2274,136 @@ async function palette($: EngineInterface): Promise<Palette> {
 async function setTheme($: EngineInterface, name: string) {
   await update($, theme, () => name)
   await $.store.set('theme', name)
+  void syncWeb($).catch(() => undefined)
+}
+
+// Everything in one group or the catch-all "Khác": a new setting never goes missing.
+function settingGroups(): [string, (keyof Settings)[]][] {
+  const placed = new Set(Object.values(SETTING_GROUPS).flat())
+  return [
+    ...Object.entries(SETTING_GROUPS),
+    ['Khác', (Object.keys(SETTING_INFO) as (keyof Settings)[]).filter(k => !placed.has(k))],
+  ]
+}
+
+const allOn = () =>
+  Object.fromEntries((Object.keys(DEFAULTS) as (keyof Settings)[]).filter(k => !EXPERIMENTAL.has(k)).map(k => [k, true]))
+
+// Settings web (/mods web): a Node child serving a page on 127.0.0.1. It reads the
+// state file this writes and prints `SET {json}` for each change made on the page.
+let webUrl: string | null = null
+let webState = ''
+
+async function syncWeb($: EngineInterface) {
+  if (!webState) return
+  const [s, current] = await Promise.all([read($, settings), read($, theme)])
+  const state = {
+    settings: s,
+    info: SETTING_INFO,
+    groups: settingGroups(),
+    experimental: [...EXPERIMENTAL],
+    themes: Object.keys(THEMES),
+    theme: current,
+  }
+  await $.fs.write(webState, JSON.stringify(state))
+}
+
+// The page is untrusted input: only a known key with a boolean, a known theme, or a preset.
+export async function applyWebChange($: EngineInterface, change: unknown) {
+  if (!change || typeof change !== 'object') return
+  const c = change as Record<string, unknown>
+  if (typeof c.key === 'string' && Object.hasOwn(DEFAULTS, c.key) && typeof c.value === 'boolean') {
+    await setSetting($, c.key as keyof Settings, c.value)
+  } else if (typeof c.theme === 'string' && Object.hasOwn(THEMES, c.theme)) {
+    await setTheme($, c.theme)
+  } else if (c.all === true) {
+    await setSettings($, allOn())
+  } else if (c.defaults === true) {
+    await setSettings($, DEFAULTS)
+  }
+}
+
+// Resolves the port once the child prints it; the loop then runs for the child's
+// life. Past the deadline the start is abandoned: a late PORT ends the loop, which kills it.
+function spawnWeb($: EngineInterface, argv: string[], deadlineMs: number) {
+  return new Promise<number>((resolve, reject) => {
+    let abandoned = false
+    const timer = $.clock.after(deadlineMs, () => {
+      abandoned = true
+      reject(new Error('timeout'))
+    })
+    void (async () => {
+      let buf = ''
+      let port = 0
+      try {
+        for await (const { stream, text } of $.process.spawn({ argv })) {
+          if (stream !== 'stdout') continue
+          buf += text
+          for (let nl = buf.indexOf('\n'); nl >= 0; nl = buf.indexOf('\n')) {
+            const line = buf.slice(0, nl)
+            buf = buf.slice(nl + 1)
+            if (line.startsWith('PORT ')) {
+              if (abandoned) return
+              timer.cancel()
+              port = Number(line.slice(5))
+              resolve(port)
+            } else if (port && line.startsWith('SET ')) {
+              // A bad line is skipped: a throw here would end the loop and kill the page.
+              try {
+                await applyWebChange($, JSON.parse(line.slice(4)))
+              } catch {
+                // Skipped.
+              }
+            }
+          }
+        }
+      } catch (err) {
+        reject(err)
+      } finally {
+        timer.cancel()
+        // This child was the live page: the next /mods web starts a new one.
+        if (port && webUrl?.startsWith(`http://127.0.0.1:${port}/`)) {
+          webUrl = null
+          webState = ''
+        }
+        reject(new Error('settings web exited'))
+      }
+    })()
+  })
+}
+
+async function startWeb($: EngineInterface) {
+  const dir = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA
+  if (!dir) return 'Không có thư mục dữ liệu của plugin, không mở được trang cài đặt.'
+  const state = `${dir}/web-state.json`
+  webState = state
+  await syncWeb($)
+  const token = crypto.randomUUID()
+  const script = `${$.plugin.root}/scripts/settings-web.mjs`
+  for (const runtime of ['node', 'bun']) {
+    try {
+      const port = await spawnWeb($, [runtime, script, token, state], 5000)
+      webUrl = `http://127.0.0.1:${port}/?t=${token}`
+      return null
+    } catch {
+      // Not installed or too slow: the next runtime.
+    }
+  }
+  webState = ''
+  return 'Không chạy được trang cài đặt: cần node hoặc bun trong PATH.'
+}
+
+// One start at a time: a second /mods web while the first starts waits for it.
+let webStarting: Promise<string | null> | null = null
+
+export async function webCommand($: EngineInterface) {
+  if (!webUrl) {
+    webStarting ??= startWeb($).finally(() => (webStarting = null))
+    const failed = await webStarting
+    if (failed || !webUrl) return failed ?? 'Không mở được trang cài đặt.'
+  }
+  await openTarget($, webUrl).catch(() => undefined)
+  return `Đã mở trang cài đặt trong trình duyệt: ${webUrl}\nChỉ máy này mở được; trang tự tắt sau 30 phút không dùng.`
 }
 
 const rgbOf = (hex: string) => {
@@ -3756,6 +3892,7 @@ async function helpText($: EngineInterface) {
     '  prompts   prompt nhanh: bấm để gửi',
     '  save <x>  lưu x thành một prompt nhanh',
     '  settings  tab cài đặt: bật/tắt nhanh mọi tính năng',
+    '  web       trang cài đặt trong trình duyệt: mọi tính năng và theme',
     `  theme <x> bảng màu: ${Object.keys(THEMES).join(' | ')}`,
     '  clear     xoá nội dung đang gõ trong ô nhập',
     '  replay    xem lại từng file Claude sửa ở lượt vừa xong, từng diff một',
@@ -3935,6 +4072,8 @@ export const register: Register = on => {
         return placed(await openPrompts($), 'Đã mở prompt nhanh.')
       case 'settings':
         return placed(await openSettings($), 'Đã mở tab cài đặt.')
+      case 'web':
+        return { text: await webCommand($) }
       case 'budget':
         return { text: await budgetCommand($, args.slice(word.length).trim()) }
       case 'history':
@@ -5239,12 +5378,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    // Everything in one group or the catch-all "Khác": a new setting never goes missing.
-    const placed = new Set(Object.values(SETTING_GROUPS).flat())
-    const groups: [string, (keyof Settings)[]][] = [
-      ...Object.entries(SETTING_GROUPS),
-      ['Khác', keys.filter(k => !placed.has(k))],
-    ]
+    const groups = settingGroups()
 
     return (
       <Box flexDirection="column" width={e.props.bodyColumns} paddingX={1}>
@@ -5268,9 +5402,7 @@ export const register: Register = on => {
             key="all-on"
             label="✦ Bật hết"
             dimColor
-            onPress={() =>
-              void setSettings($, Object.fromEntries(keys.filter(k => !EXPERIMENTAL.has(k)).map(k => [k, true])))
-            }
+            onPress={() => void setSettings($, allOn())}
           />
           <Button key="defaults" label="↺ Mặc định" dimColor onPress={() => void setSettings($, DEFAULTS)} />
         </Box>

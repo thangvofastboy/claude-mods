@@ -66,7 +66,7 @@ test('a crew frame fills one row per lane and keeps model text out of the cells'
   expect(glyphs.slice(40).filter(g => g === 0x25cf).length).toBe(1)
 })
 
-test('two agents at once open the monitor, once per burst', async ($, on) => {
+test('two agents at once open the monitor once per burst, only with crew on', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on)
   let listed = [agent('a1')]
@@ -81,8 +81,13 @@ test('two agents at once open the monitor, once per burst', async ($, on) => {
   listed = [agent('a1'), agent('a2')]
   await spawn()
   await clock.advance(10)
-  expect(opened).toEqual(['terminal-polish-monitor'])
+  // crew is off by default: two agents open nothing.
+  expect(opened).toEqual([])
+  await $.command.run({ command: 'mods', args: 'crew', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as never)
   listed = [agent('a1'), agent('a2'), agent('a3')]
+  await spawn()
+  await clock.advance(10)
+  expect(opened).toEqual(['terminal-polish-monitor'])
   await spawn()
   await clock.advance(10)
   expect(opened).toEqual(['terminal-polish-monitor'])
