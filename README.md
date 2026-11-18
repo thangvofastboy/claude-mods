@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/tag/thangvofastboy/claude-mods?label=release&color=cba6f7&style=for-the-badge)](https://github.com/thangvofastboy/claude-mods/tags)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-mod-d97757?style=for-the-badge)
-![Tests](https://img.shields.io/badge/tests-82%20passing-a6e3a1?style=for-the-badge)
+![Tests](https://img.shields.io/badge/tests-106%20passing-a6e3a1?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-89b4fa?style=for-the-badge)
 ![Themes](https://img.shields.io/badge/themes-17-5b8def?style=for-the-badge)
 
