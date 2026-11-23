@@ -30,9 +30,9 @@
       "source": {
         "source": "github",
         "repo": "thangvofastboy/claude-desktop-theme",
-        "ref": "v0.4.0"
+        "ref": "v0.4.1"
       },
-      "version": "0.4.0",
+      "version": "0.4.1",
       "description": "/desktop-theme: theme cho app Claude desktop và mobile (vietnam có bản đồ Hoàng Sa, Trường Sa; tutien; taiji; dongson trống đồng; halong)"
     }
   ]
