@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent, workerSprite } from '../hooks/register'
+import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent, monCardWidth } from '../hooks/register'
 
 test('agent counts group the statuses the pane and band show', () => {
   const list = ['running', 'pending', 'waiting', 'idle', 'completed', 'completed', 'failed', 'killed'].map(status => ({
@@ -188,14 +188,18 @@ test('a main call left running when the turn ends settles as failed; subagent ca
   expect(by.get('a1')?.map(x => x.id)).toEqual(['s1'])
 })
 
-test('workerSprite: 3 rows of 5 cells, arms swing each frame, blinks every 8th', () => {
-  const a = workerSprite('🔍', 1)
-  const b = workerSprite('🔍', 2)
-  expect(a).toHaveLength(3)
-  expect(a[1]).toContain('🔍')
-  expect(a[1]).not.toBe(b[1])
-  expect(a[2]).not.toBe(b[2])
-  expect(workerSprite('💭', 8)[0]).toBe('[-_-]')
-  expect(a[0]).toBe('[•_•]')
-  for (const row of a) expect(row.replace('🔍', '##').length).toBe(5)
+test('monCardWidth: one card per row on a narrow pane, side by side on a wide one', () => {
+  expect(monCardWidth(40)).toBe(40)
+  expect(monCardWidth(60)).toBe(60)
+  expect(monCardWidth(104)).toBe(52)
+  expect(monCardWidth(160)).toBe(53)
+})
+
+test('crewFrame: auto-theme color names resolve to RGB, never black cells', () => {
+  const raw = atob(crewFrame([{ tag: 'MAIN', color: 'claude', rate: 0 }], 3, 30, { muted: 'subtle' }))
+  const words = new Uint32Array(Uint8Array.from(raw, ch => ch.charCodeAt(0)).buffer)
+  const fg = Array.from(words).filter((_, i) => i % 3 === 1)
+  expect(fg.length).toBe(30)
+  expect(fg.every(c => c !== 0)).toBe(true)
+  expect(fg).toContain(0xd77757)
 })

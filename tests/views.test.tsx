@@ -510,6 +510,11 @@ test('the AI monitor shows each agent loop with model, effort, tokens and cost',
   // a1 is in no agent list (finished): its card is gone, Main stays.
   expect(texts).not.toContain('2 lần gọi')
   expect(texts).toContain('ctx 3.0k')
+  // Figures sit in a grid of cells, the token breakdown included.
+  expect(texts).toContain('⚡ medium')
+  expect(texts).toContain('1 lần gọi')
+  expect(texts).toContain('↓ 1.0k in')
+  expect(texts).toContain('⛁ 2.0k/0 cache')
   await ui.unmount()
 })
 

@@ -866,11 +866,12 @@ const CREW_MS = 90
 const CREW_MAX = 12
 export type CrewLane = { tag: string; color: string; rate: number }
 
-// A 5-cell robot drawn beside a working agent's card: it holds the icon of the tool it
-// runs (💭 while it thinks), swings its arms each frame and blinks now and then.
-export function workerSprite(icon: string, tick: number): [string, string, string] {
-  const f = tick % 2 === 1
-  return [tick % 8 === 0 ? '[-_-]' : '[•_•]', f ? ` /${icon}\\` : ` \\${icon}/`, f ? ' ┘ └ ' : ' │ │ ']
+// Metric cells are fixed width so figures line up as a grid across rows and cards.
+const MON_CELL = 16
+// A card holds at least 3 cells plus its indent; a wide pane tiles cards side by side.
+export function monCardWidth(columns: number) {
+  const cols = Math.max(1, Math.floor(columns / (MON_CELL * 3 + 4)))
+  return Math.floor(columns / cols)
 }
 
 export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
@@ -2406,8 +2407,24 @@ export async function webCommand($: EngineInterface) {
   return `Đã mở trang cài đặt trong trình duyệt: ${webUrl}\nChỉ máy này mở được; trang tự tắt sau 30 phút không dùng.`
 }
 
-const rgbOf = (hex: string) => {
-  const n = Number.parseInt(hex.replace('#', ''), 16)
+// The auto theme names Claude's own colors ('claude', 'subtle'…); a Raster cell needs RGB,
+// and parsing a name gave NaN, which packs to 0: black text and charts on a dark pane.
+// shortcut: fixed hexes from Claude's dark theme, light themes get the same; read the live theme if one is exposed.
+const THEME_HEX: Record<string, string> = {
+  claude: '#d77757',
+  success: '#4eba65',
+  warning: '#ffc107',
+  error: '#ff6b80',
+  suggestion: '#b1b9f9',
+  subtle: '#8a8a8a',
+  permission: '#b1b9f9',
+  ide: '#47b8d6',
+  merged: '#af87ff',
+  inverseText: '#000000',
+}
+const rgbOf = (color: string) => {
+  const hex = THEME_HEX[color] ?? color
+  const n = /^#?[0-9a-f]{6}$/i.test(hex) ? Number.parseInt(hex.replace('#', ''), 16) : 0xaaaaaa
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255] as const
 }
 const hexOf = (r: number, g: number, b: number) =>
@@ -2444,7 +2461,10 @@ function meterCells(pct: number, width: number, P: Palette) {
 // ---- Raster frames (32, 33): three uint32 per cell, glyph, fg, bg, as base64.
 const DEFAULT_COLOR = 0x01000000
 const DIM_LINE = 0x5c5c5c
-const hexNum = (hex: string) => Number.parseInt(hex.replace('#', ''), 16)
+const hexNum = (color: string) => {
+  const [r, g, b] = rgbOf(color)
+  return (r << 16) | (g << 8) | b
+}
 
 function packCells(cells: readonly (readonly [number, number, number])[]) {
   const words = new Uint32Array(cells.length * 3)
@@ -5614,6 +5634,8 @@ export const register: Register = on => {
     const hueOf = new Map(list.map((a, i) => [a.id, hues[i % hues.length] ?? P.accent]))
     const width = Math.max(20, Math.min(e.props.bodyColumns ?? 60, 72))
     const byAgent = callsByAgent(callList)
+    // Subagent cards tile into as many columns as fit, so more agents show at once.
+    const cardW = monCardWidth(e.props.bodyColumns ?? 60)
     const ownOf = (agent: string | undefined) => byAgent.get(agent ?? '') ?? []
     const mainRunning = mainTurn ? activityOf(ownOf(undefined), undefined, 0).running.length : 0
     // Main has no token samples: its comet speeds up with the tools it runs at once.
@@ -5677,11 +5699,11 @@ export const register: Register = on => {
     }
     // A busy subagent: its running calls, then its last three ended.
     const subCalls = (id: string) => {
-      const act = activityOf(ownOf(id), id, 3)
+      const act = activityOf(ownOf(id), id, 1)
       return [...act.running, ...act.recent].map(c => callRow(c, `mon-${id}-${c.state}-${c.id}`))
     }
     const mainBlock = () => {
-      const act = activityOf(ownOf(undefined), undefined)
+      const act = activityOf(ownOf(undefined), undefined, 3)
       const prompt = (mainLive?.text ?? '').split('\n').find(l => l.trim())?.trim() ?? ''
       return (
         <Box key="mon-main-act" flexDirection="column">
@@ -5720,11 +5742,7 @@ export const register: Register = on => {
       )
     }
 
-    const botIcon = (id: string) => {
-      const run = ownOf(id === 'main' ? undefined : id).find(c => c.state === 'run')
-      return run ? toolIcon(run.tool) : '💭'
-    }
-    const card = (id: string, a: Agent | undefined, r: AgentStat | undefined) => {
+    const card = (id: string, a: Agent | undefined, r: AgentStat | undefined, w?: number) => {
       const l = liveBy.get(id)
       const busy = id === 'main' ? mainTurn !== null : a ? isRunning(a.status) : false
       const hue = id === 'main' ? P.accent : busy ? (hueOf.get(id) ?? P.accent) : P.muted
@@ -5746,26 +5764,30 @@ export const register: Register = on => {
       // (a filling context, the cost), and a finished agent dims as a whole.
       const live = busy || id === 'main'
       const c = (lit?: string) => (live ? lit : P.muted)
-      const meta = [
+      type Metric = { t: string; color?: string | undefined }
+      // One grid of fixed-width cells: run figures (model, time, calls, cost), then token figures.
+      const runMeta = [
         model ? { t: `◆ ${shortModel(model)}`, color: c() } : null,
         effort ? { t: `⚡ ${effort}`, color: c() } : null,
         start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c() } : null,
-        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c() } : null,
-        fill !== null ? { t: `◔ ${meter(fill, 8)} ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c() } : null,
-        r ? { t: `↻ ${r.steps} lần gọi`, color: P.muted } : null,
+        r ? { t: `↻ ${r.steps} lần gọi`, color: c() } : null,
         usd ? { t: `💰 ≈ $${usd.toFixed(3)}`, color: c(P.warn) } : null,
-      ].filter(m => m !== null)
+      ].filter((m): m is Metric => m !== null)
+      const tokMeta = [
+        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c() } : null,
+        fill !== null
+          ? { t: `◔ ${meter(fill, 5)} ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c() }
+          : r?.context
+            ? { t: `ctx ${tok(r.context)}`, color: c() }
+            : null,
+        r ? { t: `↓ ${tok(r.input)} in`, color: P.muted } : null,
+        r ? { t: `↑ ${tok(r.output)} out`, color: P.muted } : null,
+        r && (r.cacheRead || r.cacheWrite) ? { t: `⛁ ${tok(r.cacheRead)}/${tok(r.cacheWrite)} cache`, color: P.muted } : null,
+      ].filter((m): m is Metric => m !== null)
       const spark = l && busy ? spark8(l.samples) : ''
+      const cells = [...runMeta, ...tokMeta]
       return (
-        <Box key={`mon-${id}`} flexDirection="row" gap={1} marginTop={1}>
-          {busy && width >= 40 ? (
-            <Box flexDirection="column" flexShrink={0}>
-              {workerSprite(botIcon(id), Math.floor(now / CREW_MS)).map((line, i) => (
-                <Text key={`mon-${id}-bot-${i}`} {...tone(hue)}>{line}</Text>
-              ))}
-            </Box>
-          ) : null}
-          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+        <Box key={`mon-${id}`} flexDirection="column" marginTop={1} {...(w ? { width: w } : {})}>
           <Box flexDirection="row" gap={1}>
             <Text {...tone(busy ? hue : statusColor)}>{icon}</Text>
             <Text {...tone(busy || id === 'main' ? hue : P.muted)} bold>
@@ -5775,10 +5797,18 @@ export const register: Register = on => {
             {detail ? <Text dimColor={!busy} wrap="truncate-end">{detail}</Text> : null}
             <Text {...tone(statusColor)}>{status}</Text>
           </Box>
-          {meta.length || spark ? (
-            <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
-              {meta.map(m => <Text key={m.t} {...(m.color ? tone(m.color) : {})}>{m.t}</Text>)}
-              {spark ? <Text {...tone(hue)}>{spark}</Text> : null}
+          {cells.length || spark ? (
+            <Box flexDirection="row" flexWrap="wrap" paddingLeft={2}>
+              {cells.map(m => (
+                <Box key={m.t} width={MON_CELL} flexShrink={0}>
+                  <Text wrap="truncate-end" {...(m.color ? tone(m.color) : {})}>{m.t}</Text>
+                </Box>
+              ))}
+              {spark ? (
+                <Box width={MON_CELL} flexShrink={0}>
+                  <Text {...tone(hue)}>{spark}</Text>
+                </Box>
+              ) : null}
             </Box>
           ) : null}
           {busy && n ? (
@@ -5792,16 +5822,6 @@ export const register: Register = on => {
           {id === 'main' ? mainBlock() : null}
           {busy && a ? subCalls(id) : null}
           {callCharts(id === 'main' ? undefined : id, hue, `mon-${id}-chart`)}
-          {r ? (
-            <Box flexDirection="row" gap={1} paddingLeft={2}>
-              <Text dimColor>{`ctx ${tok(r.context)}`}</Text>
-              {/* Token breakdown is secondary detail: one quiet tone. */}
-              <Text dimColor>{`↓ in ${tok(r.input)}`}</Text>
-              <Text dimColor>{`↑ out ${tok(r.output)}`}</Text>
-              <Text dimColor>{`⛁ cache ${tok(r.cacheRead)}/${tok(r.cacheWrite)}`}</Text>
-            </Box>
-          ) : null}
-          </Box>
         </Box>
       )
     }
@@ -5826,7 +5846,9 @@ export const register: Register = on => {
           <Text dimColor>{`  … và ${running.length - CREW_MAX} agent nữa đang chạy`}</Text>
         ) : null}
         {main || mainTurn ? card('main', undefined, main) : null}
-        {subs.map(a => card(a.id, a, stat.get(a.id)))}
+        <Box flexDirection="row" flexWrap="wrap">
+          {subs.map(a => card(a.id, a, stat.get(a.id), cardW))}
+        </Box>
       </Box>
     )
   })
