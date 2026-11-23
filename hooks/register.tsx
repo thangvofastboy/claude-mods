@@ -116,6 +116,7 @@ const DEFAULTS: Settings = {
   shadow: false,
   prci: true,
   crew: false,
+  crewcards: true,
 }
 const SETTING_INFO: Record<keyof Settings, string> = {
   band: 'dải trạng thái trên ô prompt',
@@ -168,7 +169,8 @@ const SETTING_INFO: Record<keyof Settings, string> = {
   quiet: 'giờ yên lặng 22h–8h: không thông báo hệ điều hành, không âm thanh, không đọc to',
   quotaalert: 'cảnh báo khi giới hạn 5h hoặc 7d đã dùng từ 90%, kèm giờ reset',
   testfail: 'dải trạng thái hiện tên test lỗi đầu tiên sau lệnh test thất bại',
-  crew: 'tự mở pane AI monitor (danh sách agent chạy hoạt hình) khi có từ 2 subagent chạy cùng lúc',
+  crew: 'tự mở pane AI monitor (danh sách agent chạy hoạt hình) khi có từ 2 subagent chạy cùng lúc, tự đóng khi không còn subagent nào chạy',
+  crewcards: 'AI monitor hiện subagent dạng thẻ, 2 thẻ trên 1 dòng (tắt: dạng danh sách, mỗi subagent 1 dòng)',
   prci: 'dải trạng thái hiện PR của nhánh và CI (◌ đang chạy, ✓ pass, ✗ lỗi), báo khi CI chạy xong, phím 🔧 Sửa CI khi CI lỗi; cần gh',
   relatedtest: 'sau mỗi lần sửa file, chạy test liên quan (vitest hoặc jest), tốn thời gian',
   promptlint: 'nhắc khi prompt ngắn chỉ nói "nó", "cái này"… mà không nêu file hay mục tiêu (không chặn gửi)',
@@ -201,7 +203,7 @@ const SETTING_GROUPS: Record<string, (keyof Settings)[]> = {
   ],
   'Hiệu ứng': ['anim', 'confetti', 'fun', 'sound', 'voice'],
   'An toàn': ['guard', 'blast', 'secrets', 'budget', 'checkpoints', 'branchlock', 'shadow'],
-  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'prci', 'crew', 'relatedtest', 'promptlint'],
+  'Tiện ích': ['tldr', 'notify', 'ctxwarn', 'autocompact', 'abbrev', 'rules', 'tools', 'journal', 'compactplus', 'todos', 'msgactions', 'asknotify', 'quiet', 'quotaalert', 'testfail', 'prci', 'crew', 'crewcards', 'relatedtest', 'promptlint'],
   'Tự động': ['format', 'autocheck', 'autoupdate'],
   'Thử nghiệm': ['automodel'],
 }
@@ -765,6 +767,11 @@ async function refreshAgents($: EngineInterface) {
       }))
     agentsLive = agentSummary(found).running > 0
     if (!agentsLive) crewOpened = false
+    // Nothing runs now and the pane is still the one crew opened: close it (crew on only).
+    if (!agentsLive && crewAuto) {
+      crewAuto = false
+      if ((await read($, settings)).crew) await $.ui.close({ id: MONITOR_PANE }).catch(() => undefined)
+    }
     if (!same(await read($, agents), found)) await update($, agents, () => found)
     const prev = new Map((await read($, agentLive)).map(l => [l.id, l.endTime]))
     const now = found.some(a => !isRunning(a.status)) ? await $.clock.now() : 0
@@ -777,6 +784,8 @@ async function refreshAgents($: EngineInterface) {
 
 // The monitor opened itself for this burst of agents; a close sticks until none run.
 let crewOpened = false
+// The open pane came from crew, not the person; a manual open clears it so it stays.
+let crewAuto = false
 
 type AgentListed = Awaited<ReturnType<EngineInterface['agent']['list']>>[number]
 export const isRunning = (status: string) => status === 'running' || status === 'pending' || status === 'waiting'
@@ -861,6 +870,8 @@ export const agentIcon = (type: string) => AGENT_ICONS.find(([re]) => re.test(ty
 
 // ---- Crew lanes: one Raster row per running agent, a comet whose speed is its token rate.
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+// One spinner per agent, all braille so every glyph is one cell wide.
+const SPINS = [SPIN, '⣾⣽⣻⢿⡿⣟⣯⣷', '⠁⠂⠄⡀⢀⠠⠐⠈', '⢄⢂⢁⡁⡈⡐⡠', '⠖⠲⠴⠦']
 const CREW_TAG = 20
 const CREW_MS = 90
 const CREW_MAX = 12
@@ -868,10 +879,9 @@ export type CrewLane = { tag: string; color: string; rate: number }
 
 // Metric cells are fixed width so figures line up as a grid across rows and cards.
 const MON_CELL = 16
-// A card holds at least 3 cells plus its indent; a wide pane tiles cards side by side.
-export function monCardWidth(columns: number) {
-  const cols = Math.max(1, Math.floor(columns / (MON_CELL * 3 + 4)))
-  return Math.floor(columns / cols)
+// Cards: two per row once each holds 2 cells plus its indent; list: one full-width row each.
+export function monCardWidth(columns: number, cards = true) {
+  return cards && columns >= (MON_CELL * 2 + 4) * 2 ? Math.floor(columns / 2) : columns
 }
 
 export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
@@ -902,6 +912,21 @@ export function crewFrame(lanes: readonly CrewLane[], tick: number, width: numbe
   return packCells(cells)
 }
 
+// A running card's strip: a wave in its hue that flows faster with its token rate.
+export type CardStrip = { key: string; color: string; rate: number; width: number }
+export function stripFrame(strip: CardStrip, tick: number, P: { muted: string }) {
+  const speed = 0.3 + Math.min(1, strip.rate / 150)
+  const spark = Math.floor(tick * speed * 1.5) % (strip.width + 12)
+  const cells: (readonly [number, number, number])[] = []
+  for (let i = 0; i < strip.width; i++) {
+    const b = (Math.sin(i * 0.35 - tick * speed * 0.6) + 1) / 2
+    if (i === spark) cells.push([0x2726, hexNum(colorAt([strip.color, '#ffffff'], 0.6)), DEFAULT_COLOR])
+    else cells.push([b > 0.85 ? 0x2501 : 0x2500, hexNum(colorAt([P.muted, strip.color], 0.2 + 0.8 * b * b)), DEFAULT_COLOR])
+  }
+  return packCells(cells)
+}
+
+let cardStrips: CardStrip[] = []
 let crewLanes: CrewLane[] = []
 let crewWidth = 0
 let crewTick = 0
@@ -923,6 +948,9 @@ function syncCrew($: EngineInterface, shown: boolean, anim: boolean) {
     void $.ui
       .blit({ requestId: MONITOR_PANE, key: 'crew', cells: crewFrame(crewLanes, crewTick, crewWidth, crewP) })
       .catch(() => undefined)
+    for (const strip of cardStrips) {
+      void $.ui.blit({ requestId: MONITOR_PANE, key: strip.key, cells: stripFrame(strip, crewTick, crewP) }).catch(() => undefined)
+    }
   })
 }
 
@@ -948,6 +976,7 @@ async function openCrew($: EngineInterface) {
   if (agentSummary(await read($, agents)).running < 2) return
   crewOpened = true
   await openMonitor($)
+  crewAuto = true
 }
 
 // Counts over every agent the session has run, not only the rows drawn.
@@ -3505,7 +3534,10 @@ async function recordStep(
     return [row, ...list.filter(a => a.id !== id)].slice(0, 50)
   })
 }
-const openMonitor = ($: EngineInterface) => $.ui.open({ id: MONITOR_PANE, title: 'AI monitor' })
+const openMonitor = ($: EngineInterface) => {
+  crewAuto = false
+  return $.ui.open({ id: MONITOR_PANE, title: 'AI monitor' })
+}
 
 const openAccounts = ($: EngineInterface) => $.ui.open({ id: ACCOUNTS_PANE, title: 'Tài khoản Claude' })
 
@@ -5623,6 +5655,7 @@ export const register: Register = on => {
     const main = stat.get('main')
     if (!main && !mainTurn && list.length === 0 && gone.length === 0) {
       crewLanes = []
+      cardStrips = []
       return <Text dimColor>Chưa có agent hay phản hồi nào của model trong session này.</Text>
     }
     const total = rows.reduce((acc, r) => acc + r.usd, 0)
@@ -5634,8 +5667,8 @@ export const register: Register = on => {
     const hueOf = new Map(list.map((a, i) => [a.id, hues[i % hues.length] ?? P.accent]))
     const width = Math.max(20, Math.min(e.props.bodyColumns ?? 60, 72))
     const byAgent = callsByAgent(callList)
-    // Subagent cards tile into as many columns as fit, so more agents show at once.
-    const cardW = monCardWidth(e.props.bodyColumns ?? 60)
+    // The crewcards setting: two subagent cards per row, or a one-per-row list.
+    const cardW = monCardWidth(e.props.bodyColumns ?? 60, s.crewcards)
     const ownOf = (agent: string | undefined) => byAgent.get(agent ?? '') ?? []
     const mainRunning = mainTurn ? activityOf(ownOf(undefined), undefined, 0).running.length : 0
     // Main has no token samples: its comet speeds up with the tools it runs at once.
@@ -5650,12 +5683,31 @@ export const register: Register = on => {
     ]
     const animate = s.anim && Raster !== undefined && lanes.length > 0
     crewLanes = animate ? lanes : []
+    // Same cap as the lanes: the timer repaints each strip every frame.
+    const stripW = Math.max(4, Math.min(cardW, 72) - 2)
+    cardStrips = animate
+      ? running.slice(0, CREW_MAX).map(a => ({
+          key: `strip-${a.id}`,
+          color: hueOf.get(a.id) ?? P.accent,
+          rate: tokenRate(liveBy.get(a.id)?.samples ?? []),
+          width: stripW,
+        }))
+      : []
+    const stripOf = new Map(cardStrips.map(x => [x.key, x]))
     crewWidth = width
     crewP = { muted: P.muted }
     // Theme muted hexes are comment grays that sink into a dark pane; text reads in the
     // terminal's own foreground, dimmed, so it stays legible on any background.
     const tone = (color: string) => (color === P.muted ? { dimColor: true } : { color })
-    const spin = SPIN[Math.floor(now / CREW_MS) % SPIN.length] ?? '●'
+    const frame = Math.floor(now / CREW_MS)
+    const spin = SPIN[frame % SPIN.length] ?? '●'
+    const spinOf = (n: number | undefined) => {
+      const set = SPINS[(n ?? 0) % SPINS.length] ?? SPIN
+      return set[frame % set.length] ?? '●'
+    }
+    // A running hero's name breathes between its hue and the next one as time moves.
+    const nameHue = (hue: string, n: number) =>
+      colorAt([hue, hues[n % hues.length] ?? P.accent, hue], (frame * 0.02 + n * 0.2) % 1)
 
     // Tool calls of one loop: what runs now (with its time so far), and for main the last few that ended.
     const callRow = (c: Call, key: string) => {
@@ -5751,7 +5803,7 @@ export const register: Register = on => {
       const detail = a ? `${agentIcon(a.type)} ${a.type} · ${a.label}` : ''
       const status = id === 'main' ? '' : a ? (AGENT_STATUS[a.status] ?? a.status) : 'xong'
       const statusColor = !a ? P.muted : busy ? P.warn : a.status === 'completed' ? P.ok : a.status === 'idle' ? P.muted : P.err
-      const icon = busy ? spin : a?.status === 'completed' || !a ? '✓' : a.status === 'idle' ? '○' : '✗'
+      const icon = busy ? (id === 'main' ? spin : spinOf(n)) : a?.status === 'completed' || !a ? '✓' : a.status === 'idle' ? '○' : '✗'
       const start = l?.startTime || r?.startedAt || 0
       const end = busy ? now : (l?.endTime ?? r?.lastAt ?? 0)
       const model = l?.model || r?.model || ''
@@ -5790,13 +5842,23 @@ export const register: Register = on => {
         <Box key={`mon-${id}`} flexDirection="column" marginTop={1} {...(w ? { width: w } : {})}>
           <Box flexDirection="row" gap={1}>
             <Text {...tone(busy ? hue : statusColor)}>{icon}</Text>
-            <Text {...tone(busy || id === 'main' ? hue : P.muted)} bold>
+            <Text {...(busy && n && s.anim ? { color: nameHue(hue, n) } : tone(busy || id === 'main' ? hue : P.muted))} bold>
               {`${a?.parentId ? '↳ ' : ''}${id === 'main' ? '👑 Main' : n ? `#${n} ${hero}` : id.slice(0, 8)}`}
             </Text>
             {/* Never P.ink (near black) or P.muted (comment gray): both sink into a dark pane. */}
             {detail ? <Text dimColor={!busy} wrap="truncate-end">{detail}</Text> : null}
             <Text {...tone(statusColor)}>{status}</Text>
           </Box>
+          {Raster && stripOf.has(`strip-${id}`) ? (
+            <Box paddingLeft={2}>
+              <Raster
+                key={`strip-${id}`}
+                columns={stripW}
+                rows={1}
+                cells={stripFrame(stripOf.get(`strip-${id}`) as CardStrip, crewTick, crewP)}
+              />
+            </Box>
+          ) : null}
           {cells.length || spark ? (
             <Box flexDirection="row" flexWrap="wrap" paddingLeft={2}>
               {cells.map(m => (

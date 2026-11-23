@@ -54,6 +54,7 @@ export type Settings = {
   shadow: boolean
   prci: boolean
   crew: boolean
+  crewcards: boolean
 }
 export type Pr = { number: number; url: string; total: number; passed: number; failed: number; pending: number }
 export type Git = { branch: string; changed: number }

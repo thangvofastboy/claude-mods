@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent, monCardWidth } from '../hooks/register'
+import { activityOf, agentIcon, agentSummary, ascii, crewFrame, heroMove, heroName, liveOf, spark8, tokenRate, toolLabel, toolIcon, meter, toolMix, durSpark, settleCalls, callsByAgent, monCardWidth, stripFrame } from '../hooks/register'
 
 test('agent counts group the statuses the pane and band show', () => {
   const list = ['running', 'pending', 'waiting', 'idle', 'completed', 'completed', 'failed', 'killed'].map(status => ({
@@ -74,6 +74,8 @@ test('two agents at once open the monitor once per burst, only with crew on', as
   on('agent.list', () => ({ value: listed }) as never)
   on('agent.spawn', () => ({ agentId: 'x', model: 'claude-haiku-5-5' }) as never)
   on('ui.open', (_$, e) => (opened.push(e.id), { value: { isPlaced: true } }) as never)
+  const closed: string[] = []
+  on('ui.close', (_$, e) => (closed.push(e.id), { value: undefined }) as never)
   const spawn = () => $.agent.spawn({ prompt: 'p', description: 'd', subagentType: 'Explore', model: 'haiku' } as never)
   await spawn()
   await clock.advance(10)
@@ -106,7 +108,8 @@ test('two agents at once open the monitor once per burst, only with crew on', as
   expect(texts).toContain('20.0k tok')
   expect(texts).not.toContain('% ctx')
   expect(texts).toContain('⤷ Đang đọc a3.ts')
-  expect(await ui.findAll({ type: 'Raster' })).toHaveLength(1)
+  // The crew lanes plus one wave strip per running card.
+  expect(await ui.findAll({ type: 'Raster' })).toHaveLength(4)
   await ui.unmount()
 
   // a1 finishes: it leaves the pane, the others keep their numbers.
@@ -133,6 +136,22 @@ test('two agents at once open the monitor once per burst, only with crew on', as
   // A finished subagent leaves the pane; the header still counts it.
   expect(first.join('\n')).not.toContain('task a1')
   expect(later.join('\n')).toContain('3 agent trong session')
+
+  // All done: the auto-opened monitor closes itself.
+  listed = [agent('a1', { status: 'completed' }), agent('a2', { status: 'completed' }), agent('a3', { status: 'completed' })]
+  await spawn()
+  await clock.advance(10)
+  expect(closed).toEqual(['terminal-polish-monitor'])
+
+  // A new burst auto-opens it, the person reopens it by hand: it stays open after.
+  listed = [agent('b1'), agent('b2')]
+  await spawn()
+  await clock.advance(10)
+  await $.command.run({ command: 'mods', args: 'monitor', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as never)
+  listed = [agent('b1', { status: 'completed' }), agent('b2', { status: 'completed' })]
+  await spawn()
+  await clock.advance(10)
+  expect(closed).toEqual(['terminal-polish-monitor'])
 })
 
 test('subagents take hero names by spawn order, with moves and type icons', () => {
@@ -188,11 +207,12 @@ test('a main call left running when the turn ends settles as failed; subagent ca
   expect(by.get('a1')?.map(x => x.id)).toEqual(['s1'])
 })
 
-test('monCardWidth: one card per row on a narrow pane, side by side on a wide one', () => {
+test('monCardWidth: cards are two per row on a wide pane, list is one per row', () => {
   expect(monCardWidth(40)).toBe(40)
-  expect(monCardWidth(60)).toBe(60)
-  expect(monCardWidth(104)).toBe(52)
-  expect(monCardWidth(160)).toBe(53)
+  expect(monCardWidth(71)).toBe(71)
+  expect(monCardWidth(72)).toBe(36)
+  expect(monCardWidth(160)).toBe(80)
+  expect(monCardWidth(160, false)).toBe(160)
 })
 
 test('crewFrame: auto-theme color names resolve to RGB, never black cells', () => {
@@ -202,4 +222,14 @@ test('crewFrame: auto-theme color names resolve to RGB, never black cells', () =
   expect(fg.length).toBe(30)
   expect(fg.every(c => c !== 0)).toBe(true)
   expect(fg).toContain(0xd77757)
+})
+
+test('stripFrame: one cell per column, a moving wave in the agent hue, never black', () => {
+  const strip = { key: 'strip-a', color: 'claude', rate: 80, width: 24 }
+  const words = (tick: number) =>
+    new Uint32Array(Uint8Array.from(atob(stripFrame(strip, tick, { muted: 'subtle' })), ch => ch.charCodeAt(0)).buffer)
+  const a = words(0)
+  expect(a.length).toBe(24 * 3)
+  for (let i = 0; i < 24; i++) expect(a[i * 3 + 1]).not.toBe(0)
+  expect(Array.from(words(5))).not.toEqual(Array.from(a))
 })
