@@ -153,6 +153,7 @@ declare module 'claude-code' {
       query: string
       timer: TimerState | null
       expanded: string[]
+      monOpen: string[]
       autoModel: string | null
       autoEffort: 'low' | 'medium' | 'high' | null
       openCalls: string[]

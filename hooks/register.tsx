@@ -238,6 +238,8 @@ const found = atom({ plugin: 'terminal-polish', key: 'found' } as const, [])
 const query = atom({ plugin: 'terminal-polish', key: 'query' } as const, '')
 const timer = atom({ plugin: 'terminal-polish', key: 'timer' } as const, null)
 const expanded = atom({ plugin: 'terminal-polish', key: 'expanded' } as const, [])
+// AI monitor cards the person opened for detail; every card starts brief.
+const monOpen = atom({ plugin: 'terminal-polish', key: 'monOpen' } as const, [])
 const autoModel = atom({ plugin: 'terminal-polish', key: 'autoModel' } as const, null)
 const autoEffort = atom({ plugin: 'terminal-polish', key: 'autoEffort' } as const, null)
 const notices = atom({ plugin: 'terminal-polish', key: 'notices' } as const, [])
@@ -879,9 +881,9 @@ export type CrewLane = { tag: string; color: string; rate: number }
 
 // Metric cells are fixed width so figures line up as a grid across rows and cards.
 const MON_CELL = 16
-// Cards: two per row once each holds 2 cells plus its indent; list: one full-width row each.
+// Cards: two per row once each holds 2 cells, its indent and its frame; list: one full-width row each.
 export function monCardWidth(columns: number, cards = true) {
-  return cards && columns >= (MON_CELL * 2 + 4) * 2 ? Math.floor(columns / 2) : columns
+  return cards && columns >= (MON_CELL * 2 + 6) * 2 ? Math.floor(columns / 2) : columns
 }
 
 export function crewFrame(lanes: readonly CrewLane[], tick: number, width: number, P: { muted: string }) {
@@ -5634,7 +5636,7 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const { Box, Text } = t
     const Raster = 'Raster' in t ? t.Raster : undefined
-    const [rows, list, live, use, now, mainTurn, callList, mainLive, lastTurn] = await Promise.all([
+    const [rows, list, live, use, now, mainTurn, callList, mainLive, lastTurn, opened] = await Promise.all([
       read($, agentStats),
       read($, agents),
       read($, agentLive),
@@ -5644,7 +5646,12 @@ export const register: Register = on => {
       read($, calls),
       read($, liveTurn),
       read($, last),
+      read($, monOpen),
     ])
+    const { Button } = t
+    const isOpen = (id: string) => opened.includes(id)
+    const toggle = (id: string) =>
+      void update($, monOpen, l => (l.includes(id) ? l.filter(x => x !== id) : [...l, id].slice(-50)))
     const stat = new Map(rows.map(r => [r.id, r]))
     const liveBy = new Map(live.map(l => [l.id, l]))
     const known = new Set(list.map(a => a.id))
@@ -5684,7 +5691,8 @@ export const register: Register = on => {
     const animate = s.anim && Raster !== undefined && lanes.length > 0
     crewLanes = animate ? lanes : []
     // Same cap as the lanes: the timer repaints each strip every frame.
-    const stripW = Math.max(4, Math.min(cardW, 72) - 2)
+    // Inside the card frame: 2 border cells, 2 padding, 2 indent.
+    const stripW = Math.max(4, Math.min(cardW, 72) - 6)
     cardStrips = animate
       ? running.slice(0, CREW_MAX).map(a => ({
           key: `strip-${a.id}`,
@@ -5754,7 +5762,7 @@ export const register: Register = on => {
       const act = activityOf(ownOf(id), id, 1)
       return [...act.running, ...act.recent].map(c => callRow(c, `mon-${id}-${c.state}-${c.id}`))
     }
-    const mainBlock = () => {
+    const mainBlock = (open: boolean) => {
       const act = activityOf(ownOf(undefined), undefined, 3)
       const prompt = (mainLive?.text ?? '').split('\n').find(l => l.trim())?.trim() ?? ''
       return (
@@ -5787,9 +5795,9 @@ export const register: Register = on => {
               ) : null}
             </Box>
           )}
-          {mainTurn ? act.running.map(c => callRow(c, `mon-main-run-${c.id}`)) : null}
-          {act.recent.length ? <Text dimColor>{'  Vừa xong:'}</Text> : null}
-          {act.recent.map(c => callRow(c, `mon-main-done-${c.id}`))}
+          {mainTurn && open ? act.running.map(c => callRow(c, `mon-main-run-${c.id}`)) : null}
+          {open && act.recent.length ? <Text dimColor>{'  Vừa xong:'}</Text> : null}
+          {open ? act.recent.map(c => callRow(c, `mon-main-done-${c.id}`)) : null}
         </Box>
       )
     }
@@ -5816,19 +5824,21 @@ export const register: Register = on => {
       // (a filling context, the cost), and a finished agent dims as a whole.
       const live = busy || id === 'main'
       const c = (lit?: string) => (live ? lit : P.muted)
-      type Metric = { t: string; color?: string | undefined }
+      // `brief` figures show on a closed card; the rest wait for ▸.
+      type Metric = { t: string; color?: string | undefined; brief?: boolean }
+      const open = isOpen(id)
       // One grid of fixed-width cells: run figures (model, time, calls, cost), then token figures.
       const runMeta = [
-        model ? { t: `◆ ${shortModel(model)}`, color: c() } : null,
+        model ? { t: `◆ ${shortModel(model)}`, color: c(), brief: true } : null,
         effort ? { t: `⚡ ${effort}`, color: c() } : null,
-        start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c() } : null,
+        start && end > start ? { t: `⏱ ${duration(end - start)}`, color: c(), brief: true } : null,
         r ? { t: `↻ ${r.steps} lần gọi`, color: c() } : null,
-        usd ? { t: `💰 ≈ $${usd.toFixed(3)}`, color: c(P.warn) } : null,
+        usd ? { t: `💰 ≈ $${usd.toFixed(3)}`, color: c(P.warn), brief: true } : null,
       ].filter((m): m is Metric => m !== null)
       const tokMeta = [
-        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c() } : null,
+        tokens ? { t: `✦ ${tok(tokens)} tok`, color: c(), brief: true } : null,
         fill !== null
-          ? { t: `◔ ${meter(fill, 5)} ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c() }
+          ? { t: `◔ ${meter(fill, 5)} ${fill}% ctx`, color: fill >= 80 ? P.err : fill >= 50 ? P.warn : c(), brief: true }
           : r?.context
             ? { t: `ctx ${tok(r.context)}`, color: c() }
             : null,
@@ -5836,10 +5846,18 @@ export const register: Register = on => {
         r ? { t: `↑ ${tok(r.output)} out`, color: P.muted } : null,
         r && (r.cacheRead || r.cacheWrite) ? { t: `⛁ ${tok(r.cacheRead)}/${tok(r.cacheWrite)} cache`, color: P.muted } : null,
       ].filter((m): m is Metric => m !== null)
-      const spark = l && busy ? spark8(l.samples) : ''
-      const cells = [...runMeta, ...tokMeta]
+      const spark = open && l && busy ? spark8(l.samples) : ''
+      const cells = [...runMeta, ...tokMeta].filter(m => open || m.brief)
       return (
-        <Box key={`mon-${id}`} flexDirection="column" marginTop={1} {...(w ? { width: w } : {})}>
+        // A rounded frame per agent: its hue while it runs, dimmed once it is done.
+        <Box
+          key={`mon-${id}`}
+          flexDirection="column"
+          borderStyle="round"
+          paddingX={1}
+          {...(busy || id === 'main' ? { borderColor: hue } : { borderDimColor: true })}
+          {...(w ? { width: w } : {})}
+        >
           <Box flexDirection="row" gap={1}>
             <Text {...tone(busy ? hue : statusColor)}>{icon}</Text>
             <Text {...(busy && n && s.anim ? { color: nameHue(hue, n) } : tone(busy || id === 'main' ? hue : P.muted))} bold>
@@ -5848,6 +5866,9 @@ export const register: Register = on => {
             {/* Never P.ink (near black) or P.muted (comment gray): both sink into a dark pane. */}
             {detail ? <Text dimColor={!busy} wrap="truncate-end">{detail}</Text> : null}
             <Text {...tone(statusColor)}>{status}</Text>
+            {Button ? (
+              <Button key={`mon-${id}-toggle`} label={open ? '▾' : '▸'} dimColor onPress={() => toggle(id)} />
+            ) : null}
           </Box>
           {Raster && stripOf.has(`strip-${id}`) ? (
             <Box paddingLeft={2}>
@@ -5881,9 +5902,9 @@ export const register: Register = on => {
               ) : null}
             </Box>
           ) : null}
-          {id === 'main' ? mainBlock() : null}
-          {busy && a ? subCalls(id) : null}
-          {callCharts(id === 'main' ? undefined : id, hue, `mon-${id}-chart`)}
+          {id === 'main' ? mainBlock(open) : null}
+          {open && busy && a ? subCalls(id) : null}
+          {open && callCharts(id === 'main' ? undefined : id, hue, `mon-${id}-chart`)}
         </Box>
       )
     }

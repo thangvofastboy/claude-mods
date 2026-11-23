@@ -209,8 +209,8 @@ test('a main call left running when the turn ends settles as failed; subagent ca
 
 test('monCardWidth: cards are two per row on a wide pane, list is one per row', () => {
   expect(monCardWidth(40)).toBe(40)
-  expect(monCardWidth(71)).toBe(71)
-  expect(monCardWidth(72)).toBe(36)
+  expect(monCardWidth(75)).toBe(75)
+  expect(monCardWidth(76)).toBe(38)
   expect(monCardWidth(160)).toBe(80)
   expect(monCardWidth(160, false)).toBe(160)
 })
