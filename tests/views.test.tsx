@@ -509,12 +509,16 @@ test('the AI monitor shows each agent loop with model, effort, tokens and cost',
   expect(texts).toContain('◆ sonnet-5-5')
   // a1 is in no agent list (finished): its card is gone, Main stays.
   expect(texts).not.toContain('2 lần gọi')
-  expect(texts).toContain('ctx 3.0k')
+  // A closed card keeps only the brief figures.
+  expect(texts).not.toContain('⚡ medium')
+  await ui.press({ key: 'mon-main-toggle' })
+  const open = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  expect(open).toContain('ctx 3.0k')
   // Figures sit in a grid of cells, the token breakdown included.
-  expect(texts).toContain('⚡ medium')
-  expect(texts).toContain('1 lần gọi')
-  expect(texts).toContain('↓ 1.0k in')
-  expect(texts).toContain('⛁ 2.0k/0 cache')
+  expect(open).toContain('⚡ medium')
+  expect(open).toContain('1 lần gọi')
+  expect(open).toContain('↓ 1.0k in')
+  expect(open).toContain('⛁ 2.0k/0 cache')
   await ui.unmount()
 })
 
@@ -543,9 +547,12 @@ test('the AI monitor shows what the main loop does: prompt, running tool, last c
   expect(texts).toContain('Main')
   expect(texts).toContain('sửa pane monitor')
   expect(texts).toContain('🔧 2 tool')
-  expect(texts).toContain('heroName')
-  expect(texts).toContain('Vừa xong:')
-  expect(texts).toContain('register.tsx')
+  expect(texts).not.toContain('Vừa xong:')
+  await ui.press({ key: 'mon-main-toggle' })
+  const open = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  expect(open).toContain('heroName')
+  expect(open).toContain('Vừa xong:')
+  expect(open).toContain('register.tsx')
   await ui.unmount()
   release()
   await grep
